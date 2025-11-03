@@ -444,6 +444,8 @@ class DuetFileNameSensor(DuetPrintSensorBase):
         file_path = self.coordinator.get_sensor_state(
             file_name_json_path, self.sensor_name
         )
+        if file_path is None:
+            return None
         file_name = os.path.splitext(os.path.basename(file_path))[0]
         return file_name
 
