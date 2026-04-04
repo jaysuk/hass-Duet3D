@@ -1,19 +1,20 @@
 import logging
+import colorsys
 
 import voluptuous as vol
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
-    PLATFORM_SCHEMA,
-    LightEntity,
+    ATTR_HS_COLOR,
     ColorMode,
+    LightEntity,
+    PLATFORM_SCHEMA,
 )
 import homeassistant.helpers.config_validation as cv
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.config_entries import ConfigEntry
-import colorsys
 
 from . import DuetDataUpdateCoordinator
 
@@ -69,6 +70,12 @@ class Duet3DLightBase(CoordinatorEntity[DuetDataUpdateCoordinator], LightEntity)
 
 
 class Duet3DLight(Duet3DLightBase):
+    """Representation of a Duet3D LED light."""
+
+    _attr_supported_color_modes = {ColorMode.RGB}
+    _attr_color_mode = ColorMode.RGB
+    _attr_should_poll = False
+
     def __init__(
         self,
         coordinator: DuetDataUpdateCoordinator,
@@ -91,11 +98,6 @@ class Duet3DLight(Duet3DLightBase):
     def name(self):
         """Return the name of the light."""
         return self._attr_name
-
-    @property
-    def should_poll(self):
-        """No polling needed for a Duet3D light."""
-        return False
 
     @property
     def is_on(self):
@@ -123,8 +125,8 @@ class Duet3DLight(Duet3DLightBase):
             self._brightness = kwargs[ATTR_BRIGHTNESS]
             self._last_brightness = self._brightness
 
-        if "hs_color" in kwargs:
-            self._rgb_color = self._hs_to_rgb(kwargs["hs_color"])
+        if ATTR_HS_COLOR in kwargs:
+            self._rgb_color = self._hs_to_rgb(kwargs[ATTR_HS_COLOR])
 
         if ATTR_BRIGHTNESS not in kwargs:
             self._brightness = self._last_brightness
