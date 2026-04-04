@@ -1,19 +1,20 @@
 import logging
+import colorsys
 
 import voluptuous as vol
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
-    PLATFORM_SCHEMA,
+    ATTR_HS_COLOR,
+    ColorMode,
     LightEntity,
-    SUPPORT_COLOR,
+    PLATFORM_SCHEMA,
 )
 import homeassistant.helpers.config_validation as cv
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.config_entries import ConfigEntry
-import colorsys
 
 from . import DuetDataUpdateCoordinator
 
@@ -69,6 +70,12 @@ class Duet3DLightBase(CoordinatorEntity[DuetDataUpdateCoordinator], LightEntity)
 
 
 class Duet3DLight(Duet3DLightBase):
+    """Representation of a Duet3D LED light."""
+
+    _attr_supported_color_modes = {ColorMode.RGB}
+    _attr_color_mode = ColorMode.RGB
+    _attr_should_poll = False
+
     def __init__(
         self, coordinator: DuetDataUpdateCoordinator, name: str, device_id: str
     ) -> None:
@@ -84,11 +91,6 @@ class Duet3DLight(Duet3DLightBase):
         return self._attr_name
 
     @property
-    def should_poll(self):
-        """No polling needed for a Duet3D light."""
-        return False
-
-    @property
     def is_on(self):
         """Return the state of the light."""
         return self._state
@@ -97,11 +99,6 @@ class Duet3DLight(Duet3DLightBase):
     def brightness(self):
         """Return the brightness of the light."""
         return self._brightness
-
-    @property
-    def supported_features(self):
-        """Flag supported features."""
-        return SUPPORT_COLOR
 
     @property
     def rgb_color(self):
@@ -121,8 +118,8 @@ class Duet3DLight(Duet3DLightBase):
             self._last_brightness = self._brightness
 
         # Set the RGB color if it was passed in the service call
-        if "hs_color" in kwargs:
-            self._rgb_color = self._hs_to_rgb(kwargs["hs_color"])
+        if ATTR_HS_COLOR in kwargs:
+            self._rgb_color = self._hs_to_rgb(kwargs[ATTR_HS_COLOR])
 
         # Use the last brightness value if it was not passed in the service call
         if ATTR_BRIGHTNESS not in kwargs:
