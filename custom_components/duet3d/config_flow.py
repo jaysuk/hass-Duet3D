@@ -10,7 +10,6 @@ from typing import Any
 from homeassistant.helpers.typing import UNDEFINED
 import aiohttp
 import asyncio
-import async_timeout
 from aiohttp.client_exceptions import ClientError
 
 from .const import (
@@ -72,7 +71,7 @@ def _schema_with_defaults(
 
 async def test_sbc_connection(base_url) -> str:
     connection_url = f"{base_url}/connect"
-    async with async_timeout.timeout(10):
+    async with asyncio.timeout(10):
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 connection_url, headers=CONF_JSON_HEADER
@@ -83,7 +82,7 @@ async def test_sbc_connection(base_url) -> str:
 
 async def test_standalone_connection(base_url, password) -> str:
     connection_url = f"{base_url}/rr_connect?password={password}"
-    async with async_timeout.timeout(10):
+    async with asyncio.timeout(10):
         async with aiohttp.ClientSession() as session:
             async with session.get(
                 connection_url, headers=CONF_JSON_HEADER

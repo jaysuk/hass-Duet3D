@@ -3,7 +3,6 @@ import logging
 import voluptuous as vol
 import aiohttp
 import asyncio
-import async_timeout
 import homeassistant.helpers.config_validation as cv
 from homeassistant.core import HomeAssistant
 from homeassistant.config_entries import ConfigEntry
@@ -146,6 +145,7 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         super().__init__(
             hass,
             _LOGGER,
+            config_entry=config_entry,
             name=f"duet3d-{config_entry.entry_id}",
             update_interval=timedelta(seconds=interval),
         )
@@ -198,7 +198,7 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         session = await self._get_session()
         connect_url = f"{self.base_url}/rr_connect?password={self._password}"
         try:
-            async with async_timeout.timeout(10):
+            async with asyncio.timeout(10):
                 async with session.get(connect_url, headers=CONF_JSON_HEADER) as resp:
                     resp.raise_for_status()
                     data = await resp.json()
@@ -234,10 +234,12 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
                 tools = temps.keys()
         return tools
 
-    async def get_status(self, key=None):
+    async def get_status(self, key=None, flags=None):
         """Send a get request, and return the response as a dict."""
         if self.config_entry.data[CONF_STANDALONE]:
             url = f"{self.status_api_url}?key={key}"
+            if flags:
+                url += f"&flags={flags}"
         else:
             url = self.status_api_url
         _LOGGER.debug("URL: %s", url)
@@ -246,7 +248,7 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         session = await self._get_session()
 
         try:
-            async with async_timeout.timeout(10):
+            async with asyncio.timeout(10):
                 async with session.get(url, headers=CONF_JSON_HEADER) as response:
                     if response.status == 401:
                         # Session expired, re-authenticate and retry once
@@ -284,7 +286,7 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         if self.config_entry.data[CONF_STANDALONE]:
             url = f"{self.base_url}{CONF_STANDALONE_GCODE_PATH}"
             params = {"gcode": gcode}
-            async with async_timeout.timeout(10):
+            async with asyncio.timeout(10):
                 async with session.get(
                     url, params=params, headers=CONF_TEXT_PLAIN_HEADER
                 ) as response:
@@ -300,7 +302,7 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
                     return await response.text()
         else:
             url = f"{self.base_url}{CONF_SBC_API}{CONF_SBC_GCODE_PATH}"
-            async with async_timeout.timeout(10):
+            async with asyncio.timeout(10):
                 async with session.post(
                     url, data=gcode, headers=CONF_TEXT_PLAIN_HEADER
                 ) as response:
@@ -313,7 +315,7 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
             for sensor_name, sensor_info in SENSOR_TYPES.items():
                 json_path = sensor_info["json_path"]
                 json_path = json_path.replace("status.", "")
-                sensor_data = await self.get_status(json_path)
+                sensor_data = await self.get_status(json_path, sensor_info.get("flags"))
                 if sensor_data is not None and "result" in sensor_data:
                     self.status_data[sensor_name] = sensor_data["result"]
                 else:

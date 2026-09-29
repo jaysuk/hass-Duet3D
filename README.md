@@ -36,6 +36,36 @@ Add the Duet3D Printer integration via the UI.
     - LEDd's installed => check if your printer has LED
     - Use standalone => check if your board is directly connected to your network. Uncheck if you are in SBC (duet board conencted to a rpi for example) see : [User manuel Duet](https://docs.duet3d.com/en/User_manual/Overview/Getting_started_Duet_3_MB6HC#:~:text=Standalone%20mode%20vs%20SBC%20mode%20The%20Duet%203,%28Duet%20Web%20Control%29%20etc%20work%20in%20both%20modes)
 
+## Filament / spool tracking
+
+Each extruder is exposed as a sensor so that other software (for example
+[SpoolmanSync](https://github.com/gibz104/SpoolmanSync) and [Spoolman](https://github.com/Donkie/Spoolman))
+can track which spool is loaded and how much it has used. This works in both
+standalone and SBC mode.
+
+| Entity | State | Notes |
+| --- | --- | --- |
+| `Extruder N` | Loaded filament name | One per extruder. Attributes: `name`, `type` (both the filament name), `extruder`, `tools`, `active` (this extruder belongs to the selected tool), `filament_diameter`, `position` |
+| `Filament Extruded` | mm | Filament extruded by the current job, before extrusion factors. Resets when a job starts |
+| `Current Tool` | tool number | `-1` when no tool is selected |
+
+The filament name is whatever `M701 S"PLA"` set. RepRapFirmware forgets it on
+restart, so load filament from your `config.g`/tool macros if you want it to survive
+a reboot. Names are conventionally the material (`/sys/filaments/PLA`), so `name`
+and `type` carry the same value.
+
+Requires Home Assistant 2024.11 or newer.
+
+## Development
+
+```
+pip install pytest pytest-homeassistant-custom-component
+pytest
+```
+
+The tests start the real integration in Home Assistant against a fake standalone
+Duet.
+
 ## Lovelace
 A specific card exist for this integration: 
 

@@ -61,7 +61,16 @@ SENSOR_TYPES = {
         "unit": "%",
         "icon": "mdi:clock-end",
     },
-    "Filament Extrusion": {"json_path": "status.job.rawExtrusion"},
+    "Filament Extrusion": {
+        "json_path": "status.job.rawExtrusion",
+        "unit": "mm",
+        "icon": "mdi:printer-3d-nozzle",
+    },
+    # Nested objects need an explicit depth from rr_model: d99 = full depth,
+    # v = include verbose fields, n = include nulls.
+    "Extruders": {"json_path": "status.move.extruders", "flags": "d99vn"},
+    "Tools": {"json_path": "status.tools", "flags": "d99vn"},
+    "Current Tool": {"json_path": "status.state.currentTool"},
     "Position": {
         "json_path": "status.move.axes",
         "axes": ["X", "Y", "Z"],

@@ -12,6 +12,7 @@ from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.const import PERCENTAGE, UnitOfTemperature
 from . import DuetDataUpdateCoordinator
+from .extruders import build_extruders
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -97,6 +98,30 @@ async def async_setup_entry(
     if coordinator.data["status"]:
         async_add_tool_sensors()
 
+    known_extruders: set[int] = set()
+
+    @callback
+    def async_add_extruder_sensors() -> None:
+        """Add one sensor per extruder, including any that appear later."""
+        new_extruders = []
+        for extruder in _current_extruders(coordinator):
+            index = extruder["extruder"]
+            if index in known_extruders:
+                continue
+            known_extruders.add(index)
+            new_extruders.append(
+                DuetExtruderSensor(
+                    coordinator, f"Extruder {index}", index, device_id
+                )
+            )
+        if new_extruders:
+            async_add_entities(new_extruders)
+
+    config_entry.async_on_unload(
+        coordinator.async_add_listener(async_add_extruder_sensors)
+    )
+    async_add_extruder_sensors()
+
     entities: list[SensorEntity] = [
         DuetPrintJobPercentageSensor(coordinator, "Progress", device_id),
         DuetTimeRemainingSensor(coordinator, "Time Remaining", device_id),
@@ -107,8 +132,25 @@ async def async_setup_entry(
         DuetCurrentLayerSensor(coordinator, "Current Layer", device_id),
         DuetTotalLayersSensor(coordinator, "Total Layers", device_id),
         DuetFileNameSensor(coordinator, "File Name", device_id),
+        DuetFilamentExtrudedSensor(coordinator, "Filament Extruded", device_id),
+        DuetCurrentToolSensor(coordinator, "Current Tool", device_id),
     ]
     async_add_entities(entities)
+
+
+def _current_extruders(coordinator: DuetDataUpdateCoordinator) -> list[dict]:
+    """Extruder descriptions from the latest coordinator data."""
+    if not coordinator.data or not coordinator.data.get("status"):
+        return []
+    return build_extruders(
+        coordinator.get_sensor_state(
+            SENSOR_TYPES["Extruders"]["json_path"], "Extruders"
+        ),
+        coordinator.get_sensor_state(SENSOR_TYPES["Tools"]["json_path"], "Tools"),
+        coordinator.get_sensor_state(
+            SENSOR_TYPES["Current Tool"]["json_path"], "Current Tool"
+        ),
+    )
 
 
 class DuetPrintSensorBase(CoordinatorEntity[DuetDataUpdateCoordinator], SensorEntity):
@@ -479,6 +521,140 @@ class DuetFileNameSensor(DuetPrintSensorBase):
             return None
         file_name = os.path.splitext(os.path.basename(file_path))[0]
         return file_name
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self.coordinator.last_update_success
+
+
+class DuetExtruderSensor(DuetPrintSensorBase):
+    """One extruder and the filament the firmware believes is loaded in it.
+
+    The state is the filament name set by ``M701`` (empty until one is loaded and
+    after every firmware restart). Consumers that track spools, such as
+    SpoolmanSync, use this entity as the slot a spool is assigned to, so its
+    ``unique_id`` must stay stable: it depends only on the extruder index.
+
+    Attributes deliberately mirror those other printer integrations expose per
+    slot: ``name`` and ``type`` are both the filament name, because RRF has no
+    separate material field and filament names are conventionally the material
+    (``/sys/filaments/PLA``).
+    """
+
+    _attr_icon = "mdi:printer-3d-nozzle"
+
+    def __init__(
+        self,
+        coordinator: DuetDataUpdateCoordinator,
+        sensor_name: str,
+        extruder: int,
+        device_id: str,
+    ) -> None:
+        """Initialize a new Duet3D extruder sensor."""
+        super().__init__(
+            coordinator,
+            sensor_name,
+            f"extruder-{extruder}-{device_id}",
+        )
+        self._extruder = extruder
+
+    def _describe(self) -> dict | None:
+        for extruder in _current_extruders(self.coordinator):
+            if extruder["extruder"] == self._extruder:
+                return extruder
+        return None
+
+    @property
+    def native_value(self):
+        """Return the loaded filament name, or None when nothing is loaded."""
+        described = self._describe()
+        if described is None or not described["filament"]:
+            return None
+        return described["filament"]
+
+    @property
+    def extra_state_attributes(self):
+        """Return extruder details."""
+        described = self._describe()
+        if described is None:
+            return None
+        return {
+            "extruder": described["extruder"],
+            "name": described["filament"],
+            "type": described["filament"],
+            "filament_diameter": described["filament_diameter"],
+            "position": described["position"],
+            "tools": described["tools"],
+            "active": described["active"],
+        }
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self.coordinator.last_update_success and self._describe() is not None
+
+
+class DuetFilamentExtrudedSensor(DuetPrintSensorBase):
+    """Filament extruded by the current job, before extrusion factors, in mm.
+
+    Resets when a new job starts, so it is a ``total_increasing`` sensor.
+    """
+
+    _attr_native_unit_of_measurement = "mm"
+    _attr_state_class = SensorStateClass.TOTAL_INCREASING
+    _attr_icon = "mdi:printer-3d-nozzle"
+
+    def __init__(
+        self, coordinator: DuetDataUpdateCoordinator, sensor_name: str, device_id: str
+    ) -> None:
+        """Initialize a new Duet3D sensor."""
+        super().__init__(
+            coordinator,
+            sensor_name,
+            f"{sensor_name}-{device_id}",
+        )
+
+    @property
+    def native_value(self):
+        """Return sensor state."""
+        extruded = self.coordinator.get_sensor_state(
+            SENSOR_TYPES["Filament Extrusion"]["json_path"], "Filament Extrusion"
+        )
+        if isinstance(extruded, (int, float)) and not isinstance(extruded, bool):
+            return round(extruded, 2)
+        return 0
+
+    @property
+    def available(self) -> bool:
+        """Return if entity is available."""
+        return self.coordinator.last_update_success
+
+
+class DuetCurrentToolSensor(DuetPrintSensorBase):
+    """Number of the selected tool, or -1 when none is selected."""
+
+    _attr_icon = "mdi:wrench"
+
+    def __init__(
+        self, coordinator: DuetDataUpdateCoordinator, sensor_name: str, device_id: str
+    ) -> None:
+        """Initialize a new Duet3D sensor."""
+        super().__init__(
+            coordinator,
+            sensor_name,
+            f"{sensor_name}-{device_id}",
+        )
+
+    @property
+    def native_value(self):
+        """Return sensor state."""
+        tool = self.coordinator.get_sensor_state(
+            SENSOR_TYPES["Current Tool"]["json_path"], "Current Tool"
+        )
+        if isinstance(tool, int) and not isinstance(tool, bool):
+            return tool
+        return None
 
     @property
     def available(self) -> bool:
