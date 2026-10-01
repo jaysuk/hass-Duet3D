@@ -56,9 +56,9 @@ def _schema_with_defaults(
             vol.Optional(CONF_PASSWORD, default=password): str,
             vol.Required(CONF_PORT, default=port): cv.port,
             vol.Required(CONF_INTERVAL, default=update_interval): int,
-            vol.Required(CONF_NUMBER_OF_TOOLS, default=number_of_tools): vol.Schema(
-                cv.positive_int
-            ),
+            # Not wrapped in vol.Schema: HA cannot serialise a nested Schema, and the
+            # form then fails to load with a 500.
+            vol.Required(CONF_NUMBER_OF_TOOLS, default=number_of_tools): cv.positive_int,
             vol.Optional(CONF_BED, default=has_bed): bool,
             vol.Optional(CONF_LIGHT, default=has_light): bool,
             vol.Optional(CONF_LED_STRIP_INDEX, default=led_strip_index): int,
@@ -159,15 +159,16 @@ class Duet3dConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
         config_entry: config_entries.ConfigEntry,
     ) -> config_entries.OptionsFlow:
         """Create the options flow."""
-        return Duet3dOptionsFlow(config_entry)
+        return Duet3dOptionsFlow()
 
 
 class Duet3dOptionsFlow(config_entries.OptionsFlow):
-    """Options flow for Duet3D Printer integration."""
+    """Options flow for Duet3D Printer integration.
 
-    def __init__(self, config_entry) -> None:
-        self.config_entry = config_entry
-        self.title: str | None = None
+    ``self.config_entry`` is provided by Home Assistant; assigning it is an error.
+    """
+
+    title: str | None = None
 
     @callback
     def finish_flow(self) -> FlowResult:
