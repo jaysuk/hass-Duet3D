@@ -1,0 +1,728 @@
+{
+ "state": {
+  "atxPower": null,
+  "atxPowerPort": null,
+  "beep": null,
+  "currentTool": 0,
+  "deferredPowerDown": null,
+  "displayMessage": "",
+  "gpOut": [],
+  "laserPwm": null,
+  "logFile": "",
+  "logLevel": "off",
+  "machineMode": "FFF",
+  "macroRestarted": false,
+  "messageBox": null,
+  "msUpTime": 283,
+  "powerFailScript": "",
+  "startupError": {
+   "file": "config.g",
+   "line": 115,
+   "message": "in file config.g line 115: M955: parameter 'P' too high"
+  },
+  "status": "idle",
+  "thisActive": null,
+  "thisInput": null,
+  "time": "2026-10-01T00:00:00",
+  "upTime": 286966
+ },
+ "job": {
+  "build": null,
+  "duration": null,
+  "file": {
+   "customInfo": {},
+   "filament": [],
+   "fileName": null,
+   "generatedBy": null,
+   "height": 10.0,
+   "lastModified": "2026-09-30T19:31:46",
+   "layerHeight": 0,
+   "numLayers": 0,
+   "printTime": null,
+   "simulatedTime": null,
+   "size": 5260,
+   "thumbnails": []
+  },
+  "filePosition": 0,
+  "lastDuration": 0,
+  "lastFileName": null,
+  "lastWarmUpDuration": 12,
+  "layer": null,
+  "layerTime": null,
+  "pauseDuration": null,
+  "rawExtrusion": null,
+  "timesLeft": {
+   "filament": null,
+   "file": null,
+   "slicer": null,
+   "toPause": null
+  },
+  "warmUpDuration": null
+ },
+ "heat": {
+  "bedHeaterMapping": [
+   [
+    0
+   ]
+  ],
+  "chamberHeaterMapping": [
+   [
+    2
+   ]
+  ],
+  "coldExtrudeTemperature": 160.0,
+  "coldRetractTemperature": 90.0,
+  "heaters": [
+   {
+    "active": 0,
+    "avgPwm": 1.261e-44,
+    "current": 25.74,
+    "extrPwmBoost": null,
+    "extrTempBoost": null,
+    "max": 120.0,
+    "maxBadReadings": 3,
+    "maxHeatingFaultTime": 5.0,
+    "maxTempExcursion": 15.0,
+    "min": -273.1,
+    "model": {
+     "coolingExp": 1.4,
+     "coolingRate": 1.102,
+     "deadTime": 1.1,
+     "enabled": true,
+     "fanCoolingRate": 0,
+     "heatingRate": 1.854,
+     "inverted": false,
+     "maxPwm": 1.0,
+     "pid": {
+      "d": 0.264,
+      "i": 0.05975,
+      "p": 0.34015,
+      "used": true
+     },
+     "standardVoltage": 0
+    },
+    "monitors": [
+     {
+      "action": 0,
+      "condition": "tooHigh",
+      "limit": 120.0,
+      "sensor": 0
+     },
+     {
+      "action": null,
+      "condition": "disabled",
+      "limit": null,
+      "sensor": -1
+     },
+     {
+      "action": null,
+      "condition": "disabled",
+      "limit": null,
+      "sensor": -1
+     }
+    ],
+    "sensor": 0,
+    "standby": 0,
+    "state": "off"
+   },
+   {
+    "active": 0,
+    "avgPwm": 0,
+    "current": 26.68,
+    "extrPwmBoost": 0,
+    "extrTempBoost": 0,
+    "max": 280.0,
+    "maxBadReadings": 3,
+    "maxHeatingFaultTime": 5.0,
+    "maxTempExcursion": 15.0,
+    "min": -273.1,
+    "model": {
+     "coolingExp": 1.4,
+     "coolingRate": 0.505,
+     "deadTime": 2.6,
+     "enabled": true,
+     "fanCoolingRate": 0.829,
+     "heatingRate": 3.997,
+     "inverted": false,
+     "maxPwm": 1.0,
+     "pid": {
+      "d": 0.123,
+      "i": 0.006601,
+      "p": 0.067618,
+      "used": true
+     },
+     "standardVoltage": 0
+    },
+    "monitors": [
+     {
+      "action": 0,
+      "condition": "tooHigh",
+      "limit": 280.0,
+      "sensor": 1
+     },
+     {
+      "action": null,
+      "condition": "disabled",
+      "limit": null,
+      "sensor": -1
+     },
+     {
+      "action": null,
+      "condition": "disabled",
+      "limit": null,
+      "sensor": -1
+     }
+    ],
+    "sensor": 1,
+    "standby": 175.0,
+    "state": "off"
+   },
+   {
+    "active": 0,
+    "avgPwm": 0,
+    "current": 26.38,
+    "extrPwmBoost": null,
+    "extrTempBoost": null,
+    "max": 100.0,
+    "maxBadReadings": 3,
+    "maxHeatingFaultTime": 5.0,
+    "maxTempExcursion": 15.0,
+    "min": -273.1,
+    "model": {
+     "coolingExp": 1.4,
+     "coolingRate": 0.15,
+     "deadTime": 30.0,
+     "enabled": true,
+     "fanCoolingRate": 0,
+     "heatingRate": 0.13,
+     "inverted": false,
+     "maxPwm": 1.0,
+     "pid": {
+      "d": 3.769,
+      "i": 0.002205,
+      "p": 0.17949,
+      "used": false
+     },
+     "standardVoltage": 0
+    },
+    "monitors": [
+     {
+      "action": 0,
+      "condition": "tooHigh",
+      "limit": 100.0,
+      "sensor": 2
+     },
+     {
+      "action": null,
+      "condition": "disabled",
+      "limit": null,
+      "sensor": -1
+     },
+     {
+      "action": null,
+      "condition": "disabled",
+      "limit": null,
+      "sensor": -1
+     }
+    ],
+    "sensor": 2,
+    "standby": 0,
+    "state": "off"
+   }
+  ]
+ },
+ "tools": [
+  {
+   "active": [
+    0
+   ],
+   "axes": [
+    [
+     0
+    ],
+    [
+     1
+    ],
+    [
+     2
+    ]
+   ],
+   "extruders": [
+    0
+   ],
+   "fans": [
+    0
+   ],
+   "feedForwardAdvance": 0,
+   "feedForwardPwm": [
+    0
+   ],
+   "feedForwardTemp": [
+    0
+   ],
+   "filamentExtruder": 0,
+   "heaters": [
+    1
+   ],
+   "isRetracted": false,
+   "mix": [
+    1.0
+   ],
+   "name": "",
+   "number": 0,
+   "offsets": [
+    0,
+    0,
+    0
+   ],
+   "offsetsProbed": 0,
+   "retraction": {
+    "extraRestart": 0,
+    "length": 2.0,
+    "speed": 16.7,
+    "unretractSpeed": 16.7,
+    "zHop": 0
+   },
+   "spindle": -1,
+   "spindleRpm": 0,
+   "standby": [
+    175.0
+   ],
+   "state": "active"
+  }
+ ],
+ "move": {
+  "axes": [
+   {
+    "acceleration": 5000.0,
+    "babystep": 0,
+    "backlash": 0,
+    "current": 2800,
+    "drivers": [
+     "0.0",
+     "0.3"
+    ],
+    "homed": false,
+    "jerk": 900.0,
+    "letter": "X",
+    "machinePosition": 152.5,
+    "max": 305.0,
+    "maxProbed": false,
+    "microstepping": {
+     "interpolated": true,
+     "value": 16
+    },
+    "min": 0,
+    "minProbed": false,
+    "percentCurrent": 100,
+    "percentStstCurrent": 100,
+    "phaseStep": false,
+    "printingJerk": 900.0,
+    "reducedAcceleration": 1000.0,
+    "speed": 18000.0,
+    "stepPos": 22752,
+    "stepsPerMm": 80.0,
+    "userPosition": 152.5,
+    "visible": true,
+    "workplaceOffsets": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "acceleration": 5000.0,
+    "babystep": 0,
+    "backlash": 0,
+    "current": 2800,
+    "drivers": [
+     "0.1",
+     "0.2"
+    ],
+    "homed": false,
+    "jerk": 900.0,
+    "letter": "Y",
+    "machinePosition": 131.9,
+    "max": 305.0,
+    "maxProbed": false,
+    "microstepping": {
+     "interpolated": true,
+     "value": 16
+    },
+    "min": 0,
+    "minProbed": false,
+    "percentCurrent": 100,
+    "percentStstCurrent": 100,
+    "phaseStep": false,
+    "printingJerk": 900.0,
+    "reducedAcceleration": 1000.0,
+    "speed": 18000.0,
+    "stepPos": 1648,
+    "stepsPerMm": 80.0,
+    "userPosition": 131.9,
+    "visible": true,
+    "workplaceOffsets": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   },
+   {
+    "acceleration": 350.0,
+    "babystep": 0,
+    "backlash": 0,
+    "current": 2000,
+    "drivers": [
+     "0.4",
+     "0.5",
+     "0.6",
+     "0.7"
+    ],
+    "homed": false,
+    "jerk": 300.0,
+    "letter": "Z",
+    "machinePosition": 10.0,
+    "max": 300.0,
+    "maxProbed": false,
+    "microstepping": {
+     "interpolated": true,
+     "value": 16
+    },
+    "min": -1.0,
+    "minProbed": false,
+    "percentCurrent": 100,
+    "percentStstCurrent": 100,
+    "phaseStep": false,
+    "printingJerk": 300.0,
+    "reducedAcceleration": 200.0,
+    "speed": 5000.0,
+    "stepPos": 4000,
+    "stepsPerMm": 400.0,
+    "userPosition": 10.0,
+    "visible": true,
+    "workplaceOffsets": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ]
+   }
+  ],
+  "backlashFactor": 10,
+  "calibration": {
+   "final": {
+    "deviation": 1.422e-09,
+    "mean": 3.49e-11
+   },
+   "initial": {
+    "deviation": 0.00569,
+    "mean": 0.0106
+   },
+   "numFactors": 4
+  },
+  "compensation": {
+   "fadeHeight": null,
+   "file": null,
+   "liveGrid": null,
+   "meshDeviation": null,
+   "probeGrid": {
+    "axes": [
+     "X",
+     "Y"
+    ],
+    "maxs": [
+     290.0,
+     290.0
+    ],
+    "mins": [
+     15.0,
+     70.0
+    ],
+    "radius": -1.0,
+    "spacings": [
+     8.5,
+     8.5
+    ]
+   },
+   "skew": {
+    "compensateXY": true,
+    "tanXY": 0,
+    "tanXZ": 0,
+    "tanYZ": 0
+   },
+   "type": "none"
+  },
+  "currentMove": {
+   "acceleration": 0,
+   "deceleration": 0,
+   "distance": 0,
+   "duration": 0,
+   "extrusionRate": 0,
+   "filePosition": null,
+   "laserPwm": null,
+   "requestedSpeed": 0,
+   "topSpeed": 0
+  },
+  "extruders": [
+   {
+    "acceleration": 3000.0,
+    "current": 1150,
+    "driver": "124.0",
+    "factor": 1.0,
+    "filament": "",
+    "filamentDiameter": 1.75,
+    "jerk": 600.0,
+    "microstepping": {
+     "interpolated": true,
+     "value": 16
+    },
+    "nonlinear": {
+     "a": 0,
+     "b": 0,
+     "upperLimit": 0.2
+    },
+    "percentCurrent": 100,
+    "percentStstCurrent": 100,
+    "phaseStep": false,
+    "position": 0,
+    "pressAdv": {
+     "d": null,
+     "k0": 0,
+     "k1": 0
+    },
+    "printingJerk": 600.0,
+    "rawPosition": 0,
+    "speed": 3600.0,
+    "stepsPerMm": 606.56
+   }
+  ],
+  "idle": {
+   "factor": 0.3,
+   "timeout": 30.0
+  },
+  "keepout": [],
+  "kinematics": {
+   "forwardMatrix": [
+    [
+     0.5,
+     0.5,
+     0
+    ],
+    [
+     0.5,
+     -0.5,
+     0
+    ],
+    [
+     0,
+     0,
+     1.0
+    ]
+   ],
+   "inverseMatrix": [
+    [
+     1.0,
+     1.0,
+     0
+    ],
+    [
+     1.0,
+     -1.0,
+     0
+    ],
+    [
+     0,
+     0,
+     1.0
+    ]
+   ],
+   "name": "coreXY",
+   "tiltCorrection": {
+    "correctionFactor": 1.0,
+    "lastCorrections": [
+     0.0101,
+     -0.00918,
+     0.0333,
+     0.00494
+    ],
+    "maxCorrection": 20.0,
+    "screwPitch": 0.5,
+    "screwX": [
+     -65.0,
+     370.0,
+     370.0,
+     -65.0
+    ],
+    "screwY": [
+     400.0,
+     400.0,
+     -20.0,
+     -20.0
+    ]
+   },
+   "segmentation": null
+  },
+  "limitAxes": true,
+  "minSpeed": 30.0,
+  "motionSystems": [
+   {
+    "currentMove": {
+     "acceleration": 0,
+     "deceleration": 0,
+     "distance": 0,
+     "duration": 0,
+     "extrusionRate": 0,
+     "requestedSpeed": 0,
+     "topSpeed": 0
+    },
+    "currentObject": null,
+    "currentTool": 0,
+    "nextTool": 0,
+    "previousTool": -1,
+    "printingAcceleration": 8000.0,
+    "restorePoints": [
+     {
+      "coords": [
+       0,
+       0,
+       0
+      ],
+      "extruderPos": 0,
+      "fanPwm": 0,
+      "feedRate": 3000.0,
+      "gCommandNumber": -1,
+      "laserPwm": null,
+      "toolNumber": -1
+     },
+     {
+      "coords": [
+       0,
+       0,
+       0
+      ],
+      "extruderPos": 0,
+      "fanPwm": 0,
+      "feedRate": 3000.0,
+      "gCommandNumber": -1,
+      "laserPwm": null,
+      "toolNumber": -1
+     },
+     {
+      "coords": [
+       0,
+       0,
+       0
+      ],
+      "extruderPos": 0,
+      "fanPwm": 0,
+      "feedRate": 3000.0,
+      "gCommandNumber": -1,
+      "laserPwm": null,
+      "toolNumber": -1
+     },
+     {
+      "coords": [
+       0,
+       0,
+       0
+      ],
+      "extruderPos": 0,
+      "fanPwm": 0,
+      "feedRate": 3000.0,
+      "gCommandNumber": -1,
+      "laserPwm": null,
+      "toolNumber": -1
+     },
+     {
+      "coords": [
+       0,
+       0,
+       0
+      ],
+      "extruderPos": 0,
+      "fanPwm": 0,
+      "feedRate": 3000.0,
+      "gCommandNumber": -1,
+      "laserPwm": null,
+      "toolNumber": -1
+     },
+     {
+      "coords": [
+       0,
+       0,
+       0
+      ],
+      "extruderPos": 0,
+      "fanPwm": 0,
+      "feedRate": 3000.0,
+      "gCommandNumber": -1,
+      "laserPwm": null,
+      "toolNumber": -1
+     }
+    ],
+    "rotation": {
+     "angle": 0,
+     "centre": [
+      0,
+      0
+     ]
+    },
+    "speedFactor": 1.0,
+    "travelAcceleration": 8000.0,
+    "userPosition": [
+     152.5,
+     131.9,
+     10.0
+    ],
+    "virtualEPos": 0,
+    "workplaceNumber": 0
+   }
+  ],
+  "noMovesBeforeHoming": true,
+  "queue": [
+   {
+    "gracePeriod": 0.01,
+    "length": 60
+   },
+   {
+    "gracePeriod": 0.01,
+    "length": 60
+   }
+  ],
+  "shaping": {
+   "amplitudes": [
+    0.291,
+    0.444,
+    0.226,
+    0.0384
+   ],
+   "damping": 0.21,
+   "delays": [
+    0,
+    0.006728,
+    0.013457,
+    0.020185
+   ],
+   "frequency": 76.0,
+   "type": "zvdd"
+  },
+  "speedFactor": 1.0
+ }
+}

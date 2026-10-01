@@ -1,7 +1,10 @@
 # Duet3D integration for Home Assistant
 
-This is a work in progress. Entities are created properly and values can be read from the `rr_model` (standalone) or `/machine/status` (SBC) endpoint of your Duet board. The integration is meant to use with RRF 3.4.5 and onwards.
-Ensure to select the correct mode (Standalone vs SBC)
+This is a work in progress. Entities are created properly and values can be read from the `rr_model` (standalone) or `/machine/status` (SBC) endpoint of your Duet board. Ensure to select the correct mode (Standalone vs SBC)
+
+Tested against RRF 3.7.0-rc.2 on a real standalone board. The RRF 3.6 object model
+layout (`heat.bedHeaters` instead of `heat.bedHeaterMapping`) is handled and covered by
+tests written from the firmware source, but has not been run against a 3.6.3 board.
 
 
 
@@ -10,13 +13,13 @@ Ensure to select the correct mode (Standalone vs SBC)
 ### From HACS
 
 1. Install HACS if you haven't already (see [installation guide](https://hacs.xyz/docs/configuration/basic)).
-2. Add custom repository `https://github.com/lyr3x/hass-Duet3D` as "Integration" in the settings tab of HACS.
+2. Add custom repository `https://github.com/jaysuk/hass-Duet3D` as "Integration" in the settings tab of HACS.
 3. Find and install "Duet3D" integration in HACS's "Integrations" tab.
 4. Restart your Home Assistant.
 
 ### Manual
 
-1. Download and unzip the [repo archive](https://github.com/lyr3x/hass-Duet3D/archive/master.zip). (You could also click "Download ZIP" after pressing the green button in the repo, alternatively, you could clone the repo from SSH add-on).
+1. Download and unzip the [repo archive](https://github.com/jaysuk/hass-Duet3D/archive/master.zip). (You could also click "Download ZIP" after pressing the green button in the repo, alternatively, you could clone the repo from SSH add-on).
 2. Copy contents of the archive/repo into your `/config` directory.
 3. Restart your Home Assistant.
 
@@ -31,10 +34,92 @@ Add the Duet3D Printer integration via the UI.
     - Port => Printer port => Usually 80
     - Password => password, or empty if you don't have one , or if you are using SBC
     - Update frequency
-    - Number of tools => Number of tools your printer has
-    - Hot bed => check if your printer has one
     - LEDd's installed => check if your printer has LED
     - Use standalone => check if your board is directly connected to your network. Uncheck if you are in SBC (duet board conencted to a rpi for example) see : [User manuel Duet](https://docs.duet3d.com/en/User_manual/Overview/Getting_started_Duet_3_MB6HC#:~:text=Standalone%20mode%20vs%20SBC%20mode%20The%20Duet%203,%28Duet%20Web%20Control%29%20etc%20work%20in%20both%20modes)
+
+## Temperatures
+
+Tools, bed and chamber are read from the printer's object model, so there is nothing to
+configure and they follow the printer if it changes (for example after `M563`).
+
+| Entity | Notes |
+| --- | --- |
+| `Tool N current / active / standby temperature` | One set per tool, using the heater(s) the tool says it uses (`tools[N].heaters`). Tool numbers are the firmware's, starting at 0. A tool with several heaters gets `Tool N heater 1`, and so on. Attributes: `heater`, `tool` |
+| `Bed current / active temperature` | Only if a bed heater is mapped (`heat.bedHeaterMapping`, or `heat.bedHeaters` on RRF 3.6 and earlier) |
+| `Chamber current / active temperature` | Only if a chamber heater is mapped |
+
+A heater whose temperature sensor has failed reads `unknown`, not -273.
+
+**Upgrading:** earlier versions named tool sensors from the "Number of tools" setting
+(`Tool 1`, `Tool 2`, ...) and read the heater with that number, so they were wrong
+whenever the heater and tool numbers differed. The old numbered sensors are removed
+automatically on start-up; bed sensors keep their entity. The new tool sensors have new
+entity ids (for example `sensor.<name>_tool_0_current_temperature`), so update dashboards
+and automations that used the old ones. The "Number of tools" and "Hot bed" settings no
+longer exist; entries that still have them are fine.
+
+## Other entities
+
+Everything here is discovered from the object model, so you only get what your printer
+actually has, and entities appear when the printer gains something (a CAN board, a
+filament monitor, an SD card).
+
+| Entity | Notes |
+| --- | --- |
+| `<Tool/Bed/Chamber> heater state` | `off`, `standby`, `active`, `fault`, `tuning` or `offline`. `fault` is the one to alert on |
+| `<Tool/Bed/Chamber> heater power` | Average heater PWM, % |
+| `<Fan name> speed` | One per defined fan, %. Attributes: `requested`, `rpm` (only if the fan has a tacho). Unnamed fans are `Fan N` |
+| `Extruder N flow` | The M221 extrusion factor, % |
+| `Speed Factor` | The M220 speed factor, % |
+| `Homed` | On when every visible axis is homed. Each axis is an attribute |
+| `Startup error` | On if `config.g` (or another startup file) reported an error. Attributes: `message`, `file`, `line` |
+| `Display Message` | The last `M117` message |
+| `Message Box` | The open `M291` prompt (for example "change filament"); unknown when none. Attributes: `title`, `mode`, `seq`, ... |
+| `Filament Time Remaining`, `Warm-up Duration`, `Last File Name`, `Layer Height`, `Object Height`, `Generated By` | Job details. `Last File Name` still works after a job ends. Unknown when there is no value |
+| `Extruder N filament monitor` | `ok`, or what the monitor reports (`noFilament`, `tooLittleMovement`, ...). Only for extruders that have a monitor |
+| `Extruder N filament present` | On when the monitor can see filament. Only created for monitors that can tell (simple switches; laser and pulsed monitors usually cannot) |
+| `<Board> MCU temperature`, `input voltage`, `12V rail`, `<Board> connected` | Main board and CAN expansion boards, as diagnostics. `connected` exists for expansion boards and is off when the board stops responding. `free RAM` exists but is disabled until you enable it |
+| `<Interface> IP address`, `Wi-Fi signal strength` | Signal only appears once Wi-Fi reports one |
+| `Storage N free space` | Mounted SD cards or USB drives, shown in GB with `capacity` as an attribute. Unavailable while unmounted |
+
+Filament monitor support follows the firmware's object model but has not been tried on
+a real monitor. Open an issue with the output of `rr_model?key=sensors.filamentMonitors`
+if yours does not behave.
+
+### How often it polls
+
+In standalone mode every poll is 7 small requests (job, heaters, tools, motion, fans and
+filament monitors). Boards, network and storage change rarely, so they are re-read once a
+minute instead. On a real board that is 10 requests and about 11 KB for a full read. In SBC
+mode everything comes from the single `/machine/status` request.
+
+## Actions
+
+Available under the Duet3D integration in automations and scripts. Choose the printer
+with the action's target (if you have only one printer you can leave the target empty).
+
+| Action | G-code | Refused unless the printer is... |
+| --- | --- | --- |
+| `duet3d.home` (optional `axes`, such as `X, Y`) | `G28` | idle. Homing mid-job would crash the toolhead |
+| `duet3d.pause` | `M25` | running a job |
+| `duet3d.resume` | `M24` | paused |
+| `duet3d.cancel` | `M0` | running or paused. With no job, `M0` would still run `stop.g` |
+| `duet3d.acknowledge_message` (optional `cancel`) | `M292` / `M292 P1` | showing a message box |
+| `duet3d.send_code` (`gcode`) | whatever you give it | never refused |
+
+The first five read the printer's state when they are called, not from the last poll, and
+raise an error instead of sending anything when it does not fit. `send_code` has no
+checks, so it can interrupt a job; use it for anything the others do not cover.
+
+```yaml
+action: duet3d.home
+target:
+  device_id: <your printer>
+data:
+  axes: [X, Y]
+```
+
+Replies to G-code are not returned (for example the output of `M122`).
 
 ## Filament / spool tracking
 
@@ -74,14 +159,11 @@ A specific card exist for this integration:
 ![Featured](https://github.com/repier37/ha-threedy-card/raw/master/screenshots/active.png)
 
 
-There is also the possibility to send GCodes directly with a Home Assistant service:
-```yaml
-service: duet3d.hevors_send_gcode
-data:
-  gcode: G28
-```
-Currently is not working to log the responsen from an e.g `M122`
+G-code can also be sent from automations; see [Actions](#actions).
 
 
 # Credits
+This fork is maintained by [@jaysuk](https://github.com/jaysuk). It is based on the original
+[Lyr3x/hass-Duet3D](https://github.com/Lyr3x/hass-Duet3D).
+
 Code initially based on the OctoPrint integration: [octoprint integration github](https://github.com/home-assistant/home-assistant/tree/dev/homeassistant/components/octoprint)

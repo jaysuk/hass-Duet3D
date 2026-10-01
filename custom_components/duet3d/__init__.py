@@ -20,7 +20,9 @@ from yarl import URL
 from datetime import timedelta
 
 
-from .services import async_register_services
+from .hardware import build_hardware
+from .model import build_heater_roles, resolve, set_path
+from .services import async_register_services, async_unregister_services
 
 from homeassistant.const import (
     CONF_HOST,
@@ -31,17 +33,18 @@ from homeassistant.const import (
     CONF_PASSWORD
 )
 from .const import (
-    CONF_NUMBER_OF_TOOLS,
     CONF_SBC_STATUS_PATH,
     CONF_SBC_API,
     CONF_SBC_GCODE_PATH,
     CONF_STANDALONE_API,
     CONF_STANDALONE_GCODE_PATH,
     CONF_STANDALONE,
-    CONF_BED,
     DOMAIN,
     CONF_INTERVAL,
-    SENSOR_TYPES,
+    STANDALONE_POLL_FLAGS,
+    STANDALONE_POLL_KEYS,
+    STANDALONE_SLOW_POLL_KEYS,
+    STANDALONE_SLOW_POLL_SECONDS,
     CONF_JSON_HEADER,
     CONF_TEXT_PLAIN_HEADER,
 )
@@ -96,10 +99,11 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry):
     try:
         if config_entry.data[CONF_STANDALONE]:
             _LOGGER.info("Using standalone mode")
-            fw_data = await coordinator.get_status("boards[].firmwareVersion")
-            coordinator.firmware_version = fw_data.get("result")
-            board_data = await coordinator.get_status("boards[].name")
-            coordinator.board_model = board_data.get("result")
+            # boards[0] is the main board; expansion boards follow it.
+            coordinator.firmware_version = coordinator.get_sensor_state(
+                "status.boards[0].firmwareVersion"
+            )
+            coordinator.board_model = coordinator.get_sensor_state("status.boards[0].name")
         else:
             status = coordinator.data.get("status")
             if status:
@@ -114,8 +118,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry):
 
     hass.data[DOMAIN][config_entry.entry_id] = {"coordinator": coordinator}
 
-    # register Duet3D API services (pass coordinator for auth)
-    async_register_services(hass, config_entry, coordinator)
+    async_register_services(hass)
 
     await hass.config_entries.async_forward_entry_setups(config_entry, PLATFORMS)
     config_entry.async_on_unload(config_entry.add_update_listener(update_listener))
@@ -134,6 +137,8 @@ async def async_unload_entry(hass, entry):
     if unload_ok:
         await coordinator.async_close_session()
         del hass.data[DOMAIN][entry.entry_id]
+        if not hass.data[DOMAIN]:
+            async_unregister_services(hass)
     return unload_ok
 
 
@@ -152,11 +157,14 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         self.data = {"status": None, "last_read_time": None}
         self.interval = interval
         self.config_entry = config_entry
-        self.status_last_reading = {}
         self.printer_online = False
         self.status_error_logged = False
-        self.number_of_tools = self.config_entry.data[CONF_NUMBER_OF_TOOLS]
-        self.bed = self.config_entry.data[CONF_BED]
+        # Heaters in use, found from the object model on every poll. See model.py.
+        self.heater_roles: dict[str, dict] = {}
+        # Fans, boards, storage, network and filament monitors, rebuilt every poll.
+        self.hardware: dict[str, dict[str, dict]] = build_hardware(None)
+        self._slow_status: dict = {}
+        self._slow_fetched_at: float | None = None
         self.base_url = "http{0}://{1}:{2}".format(
             "s" if self.config_entry.data[CONF_SSL] else "",
             config_entry.data[CONF_HOST],
@@ -177,7 +185,6 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         self._authenticated = False
         self.firmware_version = None
         self.board_model = None
-        self.status_data = {}
 
     async def _get_session(self) -> aiohttp.ClientSession:
         """Get or create a persistent aiohttp session."""
@@ -220,20 +227,6 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
             self._session = None
             self._authenticated = False
 
-    def get_tools(self):
-        """Get the list of tools that temperature is monitored on."""
-        tools = []
-        if self.number_of_tools > 0:
-            for tool_number in range(1, self.number_of_tools + 1):
-                tools.append(tool_number)
-        if self.bed:
-            tools.append("bed")
-        if not self.bed and self.number_of_tools == 0:
-            temps = self.status_last_reading[0].get("temperature")
-            if temps is not None:
-                tools = temps.keys()
-        return tools
-
     async def get_status(self, key=None, flags=None):
         """Send a get request, and return the response as a dict."""
         if self.config_entry.data[CONF_STANDALONE]:
@@ -264,7 +257,6 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
                         response.raise_for_status()
                         data = await response.json()
 
-                    self.status_last_reading = data
                     self.printer_online = True
                     self.status_error_logged = False
                     return data
@@ -312,40 +304,40 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
     async def _async_update_data(self):
         """Update printer data via API."""
         if self.config_entry.data[CONF_STANDALONE]:
-            for sensor_name, sensor_info in SENSOR_TYPES.items():
-                json_path = sensor_info["json_path"]
-                json_path = json_path.replace("status.", "")
-                sensor_data = await self.get_status(json_path, sensor_info.get("flags"))
-                if sensor_data is not None and "result" in sensor_data:
-                    self.status_data[sensor_name] = sensor_data["result"]
-                else:
-                    self.status_data[sensor_name] = ""
-            return {"status": self.status_data, "last_read_time": dt_util.utcnow()}
+            # One request per object model key rather than one per sensor.
+            status = {}
+            await self._fetch_keys(STANDALONE_POLL_KEYS, status)
+            now = self.hass.loop.time()
+            if (
+                self._slow_fetched_at is None
+                or now - self._slow_fetched_at >= STANDALONE_SLOW_POLL_SECONDS
+            ):
+                self._slow_status = {}
+                await self._fetch_keys(STANDALONE_SLOW_POLL_KEYS, self._slow_status)
+                self._slow_fetched_at = now
+            status.update(self._slow_status)
         else:
-            printer_status = await self.get_status()
-            if printer_status is not None:
-                return {"status": printer_status, "last_read_time": dt_util.utcnow()}
+            status = await self.get_status()
+        if status is None:
+            return None
+        self.heater_roles = build_heater_roles(
+            resolve(status, "heat"), resolve(status, "tools")
+        )
+        self.hardware = build_hardware(status)
+        return {"status": status, "last_read_time": dt_util.utcnow()}
+
+    async def _fetch_keys(self, keys, status: dict) -> None:
+        """Fetch each rr_model key into ``status`` at the same place DSF would have it."""
+        for key in keys:
+            response = await self.get_status(key, STANDALONE_POLL_FLAGS)
+            set_path(status, key, response.get("result") if isinstance(response, dict) else None)
 
     def get_sensor_state(self, json_path=None, sensor_name=None):
-        if self.config_entry.data[CONF_STANDALONE]:
-            if self.data["status"] is not None and sensor_name in self.data["status"]:
-                return self.data["status"][sensor_name]
-        else:
-            return self.get_json_value_by_path(json_path)
+        """Value at ``json_path`` (``status.…``) in either mode, or None if absent.
 
-    def get_json_value_by_path(self, json_path):
-        if json_path is None:
-            raise UpdateFailed()
-        json_data = self.data
-        for path_element in json_path.split("."):
-            if "[" in path_element:
-                list_name, index_str = path_element[:-1].split("[")
-                json_data = json_data[list_name][int(index_str)]
-            else:
-                if path_element not in json_data:
-                    return None
-                json_data = json_data[path_element]
-        return json_data
+        ``sensor_name`` is unused and kept so existing callers keep working.
+        """
+        return resolve(self.data, json_path) if json_path else None
 
     @property
     def device_info(self) -> DeviceInfo:

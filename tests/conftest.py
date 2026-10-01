@@ -48,3 +48,13 @@ def auto_enable_custom_integrations(enable_custom_integrations):
 def allow_local_sockets(socket_enabled):
     """The fake Duet listens on localhost; the plugin blocks sockets by default."""
     yield
+
+
+@pytest.fixture
+async def fake_duet():
+    """A standalone-mode Duet whose model tests can mutate."""
+    from fake_duet import start_server
+
+    server = await start_server()
+    yield server
+    await server.close()

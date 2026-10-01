@@ -1,10 +1,75 @@
 send_code:
-  name: Send GCodes to Duet
-  description: Send any GCode to the Duet3D DSF API
+  name: Send G-code
+  description: >-
+    Send any G-code to the printer. Nothing is checked first, so this can interrupt
+    a running job; prefer the other services where one fits.
+  target:
+    device:
+      integration: duet3d
   fields:
     gcode:
-      name: GCode
+      name: G-code
       description: The G-code to send to the printer.
-      example: "G28"
+      required: true
+      example: "M115"
       selector:
         text: {}
+
+home:
+  name: Home axes
+  description: >-
+    Home all axes, or only the ones given. Refused unless the printer is idle.
+  target:
+    device:
+      integration: duet3d
+  fields:
+    axes:
+      name: Axes
+      description: Axes to home. Leave empty to home everything.
+      required: false
+      example: "X, Y"
+      selector:
+        select:
+          multiple: true
+          custom_value: true
+          options: ["X", "Y", "Z"]
+
+pause:
+  name: Pause print
+  description: Pause the running job (M25). Refused unless a job is running.
+  target:
+    device:
+      integration: duet3d
+
+resume:
+  name: Resume print
+  description: Resume a paused job (M24). Refused unless the job is paused.
+  target:
+    device:
+      integration: duet3d
+
+cancel:
+  name: Cancel print
+  description: >-
+    Cancel the running or paused job (M0), which runs the printer's cancel.g.
+    Refused if no job is active.
+  target:
+    device:
+      integration: duet3d
+
+acknowledge_message:
+  name: Acknowledge message
+  description: >-
+    Dismiss the message box the printer is showing (M291 prompts, such as
+    "change filament"). Refused if there is no message.
+  target:
+    device:
+      integration: duet3d
+  fields:
+    cancel:
+      name: Press Cancel
+      description: Press the box's Cancel button instead of OK, if it has one.
+      required: false
+      default: false
+      selector:
+        boolean: {}

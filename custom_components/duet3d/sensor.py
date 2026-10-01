@@ -1,29 +1,39 @@
 """Support for monitoring Duet3D sensors."""
 import logging
 import os
+import re
+from functools import partial
 from homeassistant.components.sensor import (
     SensorDeviceClass,
     SensorEntity,
     SensorStateClass,
 )
 from homeassistant.core import HomeAssistant, callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.config_entries import ConfigEntry
-from homeassistant.const import PERCENTAGE, UnitOfTemperature
+from homeassistant.const import (
+    PERCENTAGE,
+    SIGNAL_STRENGTH_DECIBELS_MILLIWATT,
+    EntityCategory,
+    UnitOfElectricPotential,
+    UnitOfInformation,
+    UnitOfTemperature,
+)
 from . import DuetDataUpdateCoordinator
+from .entity import add_dynamic
 from .extruders import build_extruders
+from .hardware import message_box
+from .model import as_number, heater_power, heater_state, heater_value
 
 _LOGGER = logging.getLogger(__name__)
 
-NOTIFICATION_ID = "duet3d_notification"
-NOTIFICATION_TITLE = "Duet3d sensor setup error"
-
 from .const import (
     DOMAIN,
+    LEGACY_TEMPERATURE_UNIQUE_ID,
     SENSOR_TYPES,
     PRINTER_STATUS,
-    CONF_STANDALONE,
 )
 
 
@@ -37,90 +47,81 @@ async def async_setup_entry(
         "coordinator"
     ]
 
-    tools = coordinator.get_tools()
     device_id = config_entry.entry_id
     assert device_id is not None
 
-    if not tools:
-        hass.components.persistent_notification.async_create(
-            "Your printer appears to be offline.<br />"
-            "If you do not want to have your printer on <br />"
-            " at all times, and you would like to monitor <br /> "
-            "temperatures, please add <br />"
-            "bed and/or number&#95of&#95tools to your config <br />"
-            "and restart.",
-            title=NOTIFICATION_TITLE,
-            notification_id=NOTIFICATION_ID,
-        )
-    known_tools = set()
+    _remove_legacy_temperature_sensors(hass, config_entry)
 
-    @callback
-    def async_add_tool_sensors() -> None:
-        tool_types = ["current", "active", "standby"]
-        bed_types = ["current", "active"]
-        if not coordinator.data["status"]:
-            return
+    def add(discover):
+        add_dynamic(coordinator, config_entry, async_add_entities, discover)
 
-        new_tools = []
-        for tool in tools:
-            if tool == "bed":
-                assert device_id is not None
-                for bed_type in bed_types:
-                    if tool + "," + bed_type not in known_tools:
-                        known_tools.add(tool + "," + bed_type)
-                        new_tools.append(
-                            DuetTemperatureSensor(
-                                coordinator,
-                                f"Tool {tool} {bed_type} temperature",
-                                tool,
-                                bed_type,
-                                device_id,
-                            )
-                        )
-            else:
-                assert device_id is not None
-                for tool_type in tool_types:
-                    if str(tool) + "," + tool_type not in known_tools:
-                        known_tools.add(str(tool) + "," + tool_type)
-                        new_tools.append(
-                            DuetTemperatureSensor(
-                                coordinator,
-                                f"Tool {tool} {tool_type} temperature",
-                                tool,
-                                tool_type,
-                                device_id,
-                            )
-                        )
-        async_add_entities(new_tools)
+    # Everything below is discovered from the object model on each poll, so a tool,
+    # fan, board or filament monitor that appears later gets its sensors without a
+    # reload.
+    def heater_temperatures():
+        for key, role in coordinator.heater_roles.items():
+            for sensor_type in role["types"]:
+                yield (key, sensor_type), partial(
+                    DuetTemperatureSensor, coordinator, key, role["label"], sensor_type, device_id
+                )
 
-    config_entry.async_on_unload(coordinator.async_add_listener(async_add_tool_sensors))
+    def heater_extras():
+        for key, role in coordinator.heater_roles.items():
+            yield key, partial(_heater_sensors, coordinator, device_id, key, role["label"])
 
-    if coordinator.data["status"]:
-        async_add_tool_sensors()
-
-    known_extruders: set[int] = set()
-
-    @callback
-    def async_add_extruder_sensors() -> None:
-        """Add one sensor per extruder, including any that appear later."""
-        new_extruders = []
+    def extruders():
         for extruder in _current_extruders(coordinator):
             index = extruder["extruder"]
-            if index in known_extruders:
-                continue
-            known_extruders.add(index)
-            new_extruders.append(
-                DuetExtruderSensor(
-                    coordinator, f"Extruder {index}", index, device_id
-                )
+            yield index, partial(
+                DuetExtruderSensor, coordinator, f"Extruder {index}", index, device_id
             )
-        if new_extruders:
-            async_add_entities(new_extruders)
 
-    config_entry.async_on_unload(
-        coordinator.async_add_listener(async_add_extruder_sensors)
-    )
-    async_add_extruder_sensors()
+    def extruder_flow():
+        for extruder in _current_extruders(coordinator):
+            index = extruder["extruder"]
+            yield index, partial(_flow_sensor, coordinator, device_id, index)
+
+    def fans():
+        for key, fan in coordinator.hardware["fans"].items():
+            yield key, partial(_fan_sensor, coordinator, device_id, key, fan["label"])
+
+    def boards():
+        for key, board in coordinator.hardware["boards"].items():
+            for field, suffix, options in BOARD_METRICS:
+                # Not every board reports every value (v12 is null on most).
+                if board[field] is not None:
+                    yield (key, field), partial(
+                        _board_sensor, coordinator, device_id, key, board["label"], field, suffix, options
+                    )
+
+    def interfaces():
+        for key, interface in coordinator.hardware["interfaces"].items():
+            if interface["ip"] is not None:
+                yield (key, "ip"), partial(_ip_sensor, coordinator, device_id, key, interface["label"])
+            # Only a connected Wi-Fi interface reports a signal.
+            if interface["signal"] is not None:
+                yield (key, "signal"), partial(_signal_sensor, coordinator, device_id, key, interface["label"])
+
+    def volumes():
+        for key, volume in coordinator.hardware["volumes"].items():
+            yield key, partial(_storage_sensor, coordinator, device_id, key, volume["label"])
+
+    def monitors():
+        for key, monitor in coordinator.hardware["monitors"].items():
+            yield key, partial(_monitor_sensor, coordinator, device_id, key, monitor["extruder"])
+
+    for discover in (
+        heater_temperatures,
+        heater_extras,
+        extruders,
+        extruder_flow,
+        fans,
+        boards,
+        interfaces,
+        volumes,
+        monitors,
+    ):
+        add(discover)
 
     entities: list[SensorEntity] = [
         DuetPrintJobPercentageSensor(coordinator, "Progress", device_id),
@@ -134,6 +135,7 @@ async def async_setup_entry(
         DuetFileNameSensor(coordinator, "File Name", device_id),
         DuetFilamentExtrudedSensor(coordinator, "Filament Extruded", device_id),
         DuetCurrentToolSensor(coordinator, "Current Tool", device_id),
+        *_static_sensors(coordinator, device_id),
     ]
     async_add_entities(entities)
 
@@ -175,8 +177,25 @@ class DuetPrintSensorBase(CoordinatorEntity[DuetDataUpdateCoordinator], SensorEn
         return self.coordinator.device_info
 
 
+@callback
+def _remove_legacy_temperature_sensors(hass: HomeAssistant, config_entry: ConfigEntry) -> None:
+    """Delete temperature sensors from versions that numbered tools from the config.
+
+    They were keyed by tool number and read ``heaters[<number>]``, so they were
+    labelled with the wrong tool whenever heater and tool numbers differed. Their
+    replacements have different unique ids, so the old ones would otherwise linger
+    as unavailable entities. The bed sensors keep their unique ids and are kept.
+    """
+    registry = er.async_get(hass)
+    pattern = re.compile(LEGACY_TEMPERATURE_UNIQUE_ID + re.escape(config_entry.entry_id) + "$")
+    for entry in er.async_entries_for_config_entry(registry, config_entry.entry_id):
+        if entry.domain == "sensor" and pattern.match(entry.unique_id):
+            _LOGGER.info("Removing legacy temperature sensor %s", entry.entity_id)
+            registry.async_remove(entry.entity_id)
+
+
 class DuetTemperatureSensor(DuetPrintSensorBase):
-    """Representation of an Duet sensor."""
+    """Temperature of one heater, named after what it heats (tool, bed or chamber)."""
 
     _attr_native_unit_of_measurement = UnitOfTemperature.CELSIUS
     _attr_device_class = SensorDeviceClass.TEMPERATURE
@@ -185,43 +204,52 @@ class DuetTemperatureSensor(DuetPrintSensorBase):
     def __init__(
         self,
         coordinator: DuetDataUpdateCoordinator,
-        sensor_name: str,
-        tool: str,
+        key: str,
+        label: str,
         sensor_type: str,
         device_id: str,
     ) -> None:
-        """Initialize a new Duet sensor."""
+        """Initialize a new Duet sensor.
+
+        ``key`` identifies the role in ``coordinator.heater_roles`` and is what the
+        unique id is built from, so it must not depend on heater numbering.
+        """
         super().__init__(
             coordinator,
-            sensor_name,
-            f"{tool}-{sensor_type}-{device_id}",
+            f"{label} {sensor_type} temperature",
+            f"{key}-{sensor_type}-{device_id}",
         )
+        self._key = key
         self._sensor_type = sensor_type
-        self._no_of_tool = tool
 
     @property
     def native_value(self):
-        """Return sensor state."""
-        if self._no_of_tool == "bed":
-            json_path = SENSOR_TYPES["Bed Temperatures"]["json_path"]
-            bed_heater = self.coordinator.get_sensor_state(
-                json_path + "." + self._sensor_type, "Bed Temperatures"
-            )
-            if self.coordinator.config_entry.data[CONF_STANDALONE]:
-                bed_heater = bed_heater[self._sensor_type]
-            if bed_heater is not None:
-                return bed_heater
-            else:
-                return -1
-        else:
-            json_path = SENSOR_TYPES["Tool Temperatures"]["json_path"]
-            tool_heater = self.coordinator.get_sensor_state(
-                f"{json_path}", "Tool Temperatures"
-            )
-            if tool_heater is not None:
-                return tool_heater[self._no_of_tool][self._sensor_type]
-            else:
-                return -1
+        """Return the temperature, or None if the heater is gone or its sensor is faulted."""
+        role = self.coordinator.heater_roles.get(self._key)
+        if role is None:
+            return None
+        return heater_value(
+            self.coordinator.get_sensor_state(SENSOR_TYPES["Heat"]["json_path"]),
+            self.coordinator.get_sensor_state(SENSOR_TYPES["Tools"]["json_path"]),
+            role,
+            self._sensor_type,
+        )
+
+    @property
+    def extra_state_attributes(self):
+        """Which heater and tool this reading belongs to."""
+        role = self.coordinator.heater_roles.get(self._key)
+        if role is None:
+            return None
+        attributes = {"heater": role["heater"]}
+        if role["kind"] == "tool":
+            attributes["tool"] = role["tool"]
+        return attributes
+
+    @property
+    def available(self) -> bool:
+        """Unavailable once the object model no longer has this heater."""
+        return self.coordinator.last_update_success and self._key in self.coordinator.heater_roles
 
 
 class DuetPrintJobPercentageSensor(DuetPrintSensorBase):
@@ -660,3 +688,252 @@ class DuetCurrentToolSensor(DuetPrintSensorBase):
     def available(self) -> bool:
         """Return if entity is available."""
         return self.coordinator.last_update_success
+
+
+class DuetValueSensor(DuetPrintSensorBase):
+    """A sensor whose state is computed from the coordinator's data by a function.
+
+    ``exists_fn`` marks a sensor for a discovered thing (fan, board, storage...)
+    unavailable once the printer stops reporting that thing.
+    """
+
+    def __init__(
+        self,
+        coordinator: DuetDataUpdateCoordinator,
+        name: str,
+        unique_id: str,
+        value_fn,
+        *,
+        attrs_fn=None,
+        exists_fn=None,
+        unit=None,
+        device_class=None,
+        state_class=None,
+        icon=None,
+        category=None,
+        suggested_unit=None,
+        enabled_default=True,
+    ) -> None:
+        super().__init__(coordinator, name, unique_id)
+        self._value_fn = value_fn
+        self._attrs_fn = attrs_fn
+        self._exists_fn = exists_fn
+        self._attr_native_unit_of_measurement = unit
+        self._attr_device_class = device_class
+        self._attr_state_class = state_class
+        self._attr_icon = icon
+        self._attr_entity_category = category
+        self._attr_suggested_unit_of_measurement = suggested_unit
+        self._attr_entity_registry_enabled_default = enabled_default
+
+    @property
+    def native_value(self):
+        return self._value_fn(self.coordinator)
+
+    @property
+    def extra_state_attributes(self):
+        return self._attrs_fn(self.coordinator) if self._attrs_fn else None
+
+    @property
+    def available(self) -> bool:
+        if not self.coordinator.last_update_success:
+            return False
+        return self._exists_fn is None or self._exists_fn(self.coordinator)
+
+
+def _hw(coordinator: DuetDataUpdateCoordinator, group: str, key: str, field: str | None = None):
+    """One discovered thing (or one field of it) from the latest poll, or None."""
+    item = coordinator.hardware.get(group, {}).get(key)
+    return item if field is None or item is None else item.get(field)
+
+
+def _heater_sensors(coordinator, device_id, key, label) -> list[DuetValueSensor]:
+    """State (``off``, ``active``, ``fault`` ...) and average power of one heater."""
+
+    def heat(c):
+        return c.get_sensor_state(SENSOR_TYPES["Heat"]["json_path"])
+
+    def state(c):
+        role = c.heater_roles.get(key)
+        return heater_state(heat(c), role) if role else None
+
+    def power(c):
+        role = c.heater_roles.get(key)
+        return heater_power(heat(c), role) if role else None
+
+    def exists(c):
+        return key in c.heater_roles
+
+    return [
+        DuetValueSensor(
+            coordinator, f"{label} heater state", f"{key}-state-{device_id}", state,
+            exists_fn=exists, icon="mdi:radiator",
+        ),
+        DuetValueSensor(
+            coordinator, f"{label} heater power", f"{key}-power-{device_id}", power,
+            exists_fn=exists, unit=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT,
+            icon="mdi:flash",
+        ),
+    ]
+
+
+def _fan_sensor(coordinator, device_id, key, label) -> DuetValueSensor:
+    return DuetValueSensor(
+        coordinator, f"{label} speed", f"{key}-{device_id}",
+        lambda c: _hw(c, "fans", key, "speed"),
+        attrs_fn=lambda c: {
+            "requested": _hw(c, "fans", key, "requested"),
+            "rpm": _hw(c, "fans", key, "rpm"),
+        },
+        exists_fn=lambda c: _hw(c, "fans", key) is not None,
+        unit=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, icon="mdi:fan",
+    )
+
+
+def _flow_sensor(coordinator, device_id, extruder) -> DuetValueSensor:
+    """The M221 extrusion factor of one extruder, as a percentage."""
+
+    def flow(c):
+        factor = as_number(c.get_sensor_state(f"status.move.extruders[{extruder}].factor"))
+        return None if factor is None else round(factor * 100, 1)
+
+    return DuetValueSensor(
+        coordinator, f"Extruder {extruder} flow", f"flow-{extruder}-{device_id}", flow,
+        exists_fn=lambda c: c.get_sensor_state(f"status.move.extruders[{extruder}]") is not None,
+        unit=PERCENTAGE, state_class=SensorStateClass.MEASUREMENT, icon="mdi:water-percent",
+    )
+
+
+# (field in hardware.build_boards, name suffix, options)
+BOARD_METRICS = (
+    ("mcu_temp", "MCU temperature", dict(
+        unit=UnitOfTemperature.CELSIUS, device_class=SensorDeviceClass.TEMPERATURE)),
+    ("v_in", "input voltage", dict(
+        unit=UnitOfElectricPotential.VOLT, device_class=SensorDeviceClass.VOLTAGE)),
+    ("v_12", "12V rail", dict(
+        unit=UnitOfElectricPotential.VOLT, device_class=SensorDeviceClass.VOLTAGE)),
+    ("free_ram", "free RAM", dict(
+        unit=UnitOfInformation.BYTES, device_class=SensorDeviceClass.DATA_SIZE,
+        suggested_unit=UnitOfInformation.KILOBYTES, enabled_default=False)),
+)
+
+
+def _board_sensor(coordinator, device_id, key, label, field, suffix, options) -> DuetValueSensor:
+    return DuetValueSensor(
+        coordinator, f"{label} {suffix}", f"{key}-{field}-{device_id}",
+        lambda c: _hw(c, "boards", key, field),
+        exists_fn=lambda c: _hw(c, "boards", key) is not None,
+        state_class=SensorStateClass.MEASUREMENT, category=EntityCategory.DIAGNOSTIC,
+        **options,
+    )
+
+
+def _ip_sensor(coordinator, device_id, key, label) -> DuetValueSensor:
+    return DuetValueSensor(
+        coordinator, f"{label} IP address", f"{key}-ip-{device_id}",
+        lambda c: _hw(c, "interfaces", key, "ip"),
+        exists_fn=lambda c: _hw(c, "interfaces", key) is not None,
+        category=EntityCategory.DIAGNOSTIC, icon="mdi:ip-network",
+    )
+
+
+def _signal_sensor(coordinator, device_id, key, label) -> DuetValueSensor:
+    return DuetValueSensor(
+        coordinator, f"{label} signal strength", f"{key}-signal-{device_id}",
+        lambda c: _hw(c, "interfaces", key, "signal"),
+        exists_fn=lambda c: _hw(c, "interfaces", key) is not None,
+        unit=SIGNAL_STRENGTH_DECIBELS_MILLIWATT, device_class=SensorDeviceClass.SIGNAL_STRENGTH,
+        state_class=SensorStateClass.MEASUREMENT, category=EntityCategory.DIAGNOSTIC,
+    )
+
+
+def _storage_sensor(coordinator, device_id, key, label) -> DuetValueSensor:
+    return DuetValueSensor(
+        coordinator, f"{label} free space", f"{key}-free-{device_id}",
+        lambda c: _hw(c, "volumes", key, "free"),
+        attrs_fn=lambda c: {"capacity": _hw(c, "volumes", key, "capacity")},
+        # unmounting the card makes this unavailable rather than 0
+        exists_fn=lambda c: _hw(c, "volumes", key) is not None,
+        unit=UnitOfInformation.BYTES, device_class=SensorDeviceClass.DATA_SIZE,
+        suggested_unit=UnitOfInformation.GIGABYTES, state_class=SensorStateClass.MEASUREMENT,
+        category=EntityCategory.DIAGNOSTIC,
+    )
+
+
+def _monitor_sensor(coordinator, device_id, key, extruder) -> DuetValueSensor:
+    """Filament monitor status: ``ok``, or what the monitor is complaining about."""
+    return DuetValueSensor(
+        coordinator, f"Extruder {extruder} filament monitor", f"{key}-status-{device_id}",
+        lambda c: _hw(c, "monitors", key, "status"),
+        attrs_fn=lambda c: {
+            "type": _hw(c, "monitors", key, "type"),
+            "enable_mode": _hw(c, "monitors", key, "enable_mode"),
+            "filament_present": _hw(c, "monitors", key, "present"),
+            "extruder": extruder,
+        },
+        exists_fn=lambda c: _hw(c, "monitors", key) is not None,
+        icon="mdi:motion-sensor",
+    )
+
+
+def _minutes(value):
+    number = as_number(value)
+    return None if number is None else round(number / 60.0, 2)
+
+
+def _positive(value):
+    number = as_number(value)
+    return number if number and number > 0 else None
+
+
+def _text_or_none(value):
+    return value if isinstance(value, str) and value else None
+
+
+def _file_stem(value):
+    return os.path.splitext(os.path.basename(value))[0] if _text_or_none(value) else None
+
+
+def _percent(value):
+    number = as_number(value)
+    return None if number is None else round(number * 100, 1)
+
+
+def _static_sensors(coordinator, device_id) -> list[DuetValueSensor]:
+    """Job details and machine messages that exist on every printer."""
+
+    def at(sensor_type, transform=lambda v: v):
+        path = SENSOR_TYPES[sensor_type]["json_path"]
+        return lambda c: transform(c.get_sensor_state(path))
+
+    def sensor(name, value_fn, **options):
+        return DuetValueSensor(coordinator, name, f"{name}-{device_id}", value_fn, **options)
+
+    measurement = SensorStateClass.MEASUREMENT
+    state_path = SENSOR_TYPES["Machine State"]["json_path"]
+
+    def box(c):
+        found = message_box(c.get_sensor_state(state_path))
+        return found["message"] if found else None
+
+    def box_attributes(c):
+        found = message_box(c.get_sensor_state(state_path))
+        return {k: v for k, v in found.items() if k != "message"} if found else None
+
+    return [
+        sensor("Filament Time Remaining", at("Filament Time Remaining", _minutes),
+               unit="min", state_class=measurement, icon="mdi:clock-end"),
+        sensor("Warm-up Duration", at("Warm-up Duration", _minutes),
+               unit="min", state_class=measurement, icon="mdi:clock-start"),
+        sensor("Last File Name", at("Last File Name", _file_stem), icon="mdi:file-clock"),
+        sensor("Layer Height", at("Layer Height", _positive),
+               unit="mm", state_class=measurement, icon="mdi:layers"),
+        sensor("Object Height", at("Object Height", _positive),
+               unit="mm", state_class=measurement, icon="mdi:arrow-expand-vertical"),
+        sensor("Generated By", at("Generated By", _text_or_none),
+               category=EntityCategory.DIAGNOSTIC, icon="mdi:application-cog"),
+        sensor("Speed Factor", at("Speed Factor", _percent),
+               unit=PERCENTAGE, state_class=measurement, icon="mdi:speedometer"),
+        sensor("Display Message", at("Display Message", _text_or_none), icon="mdi:message-text"),
+        sensor("Message Box", box, attrs_fn=box_attributes, icon="mdi:message-alert"),
+    ]

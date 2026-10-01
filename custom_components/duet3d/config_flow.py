@@ -13,8 +13,6 @@ import asyncio
 from aiohttp.client_exceptions import ClientError
 
 from .const import (
-    CONF_NUMBER_OF_TOOLS,
-    CONF_BED,
     DOMAIN,
     CONF_NAME,
     DEFAULT_NAME,
@@ -41,8 +39,6 @@ def _schema_with_defaults(
     port=80,
     password="",
     update_interval=30,
-    number_of_tools=1,
-    has_bed=True,
     has_light=False,
     led_strip_index=0,
     led_count=1,
@@ -56,10 +52,9 @@ def _schema_with_defaults(
             vol.Optional(CONF_PASSWORD, default=password): str,
             vol.Required(CONF_PORT, default=port): cv.port,
             vol.Required(CONF_INTERVAL, default=update_interval): int,
-            # Not wrapped in vol.Schema: HA cannot serialise a nested Schema, and the
+            # Tools, bed and chamber are read from the object model, not configured.
+            # Do not wrap fields in a nested vol.Schema: HA cannot serialise it and the
             # form then fails to load with a 500.
-            vol.Required(CONF_NUMBER_OF_TOOLS, default=number_of_tools): cv.positive_int,
-            vol.Optional(CONF_BED, default=has_bed): bool,
             vol.Optional(CONF_LIGHT, default=has_light): bool,
             vol.Optional(CONF_LED_STRIP_INDEX, default=led_strip_index): int,
             vol.Optional(CONF_LED_COUNT, default=led_count): int,
@@ -131,8 +126,6 @@ class Duet3dConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: user_input[CONF_PASSWORD],
                         CONF_SSL: user_input[CONF_SSL],
                         CONF_INTERVAL: user_input[CONF_INTERVAL],
-                        CONF_NUMBER_OF_TOOLS: user_input[CONF_NUMBER_OF_TOOLS],
-                        CONF_BED: user_input[CONF_BED],
                         CONF_LIGHT: user_input[CONF_LIGHT],
                         CONF_LED_STRIP_INDEX: user_input.get(CONF_LED_STRIP_INDEX, 0),
                         CONF_LED_COUNT: user_input.get(CONF_LED_COUNT, 1),
@@ -191,7 +184,6 @@ class Duet3dOptionsFlow(config_entries.OptionsFlow):
         if user_input is not None:
             self.new_entry_data = {
                 CONF_INTERVAL: user_input[CONF_INTERVAL],
-                CONF_BED: user_input[CONF_BED],
                 CONF_LIGHT: user_input[CONF_LIGHT],
                 CONF_LED_STRIP_INDEX: user_input.get(CONF_LED_STRIP_INDEX, 0),
                 CONF_LED_COUNT: user_input.get(CONF_LED_COUNT, 1),
@@ -206,10 +198,6 @@ class Duet3dOptionsFlow(config_entries.OptionsFlow):
                         CONF_INTERVAL, config_data.get(CONF_INTERVAL)
                     ),
                 ): cv.positive_int,
-                vol.Optional(
-                    CONF_BED,
-                    default=config_data.get(CONF_BED),
-                ): bool,
                 vol.Optional(
                     CONF_LIGHT,
                     default=config_data.get(CONF_LIGHT),

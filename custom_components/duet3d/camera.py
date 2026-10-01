@@ -63,7 +63,13 @@ class DuetThumbnailCamera(CoordinatorEntity[DuetDataUpdateCoordinator], Camera):
         job_thumbnail = self.coordinator.get_sensor_state(
             SENSOR_TYPES[self.camera_name]["json_path"], self.camera_name
         )
-        return len(job_thumbnail) > 0
+        # Only DSF (SBC mode) embeds the image; rr_model lists thumbnails without data.
+        return (
+            isinstance(job_thumbnail, list)
+            and len(job_thumbnail) > 0
+            and isinstance(job_thumbnail[0], dict)
+            and "data" in job_thumbnail[0]
+        )
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None

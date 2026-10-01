@@ -27,7 +27,9 @@ async def test_user_form_is_served_over_http(hass, hass_client):
     assert result["type"] == "form"
     assert result["step_id"] == "user"
     fields = {field["name"] for field in result["data_schema"]}
-    assert {"name", "host", "port", "update_interval", "number_of_tools", "standalone"} <= fields
+    assert {"name", "host", "port", "update_interval", "standalone"} <= fields
+    # tools, bed and chamber come from the object model
+    assert not {"number_of_tools", "bed"} & fields
 
 
 async def test_options_form_is_served_over_http(hass, hass_client):
@@ -62,6 +64,38 @@ async def test_options_form_is_served_over_http(hass, hass_client):
     result = await response.json()
     assert result["type"] == "form"
     assert result["step_id"] == "init"
+    # the entry above still carries the retired number_of_tools/bed keys
+    assert not {"number_of_tools", "bed"} & {field["name"] for field in result["data_schema"]}
+
+
+async def test_saving_options_keeps_working_for_an_entry_with_retired_keys(hass):
+    from unittest.mock import patch
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "name": "duet",
+            "host": "192.168.69.1",
+            "port": 80,
+            "password": "",
+            "ssl": False,
+            "update_interval": 10,
+            "number_of_tools": 1,
+            "bed": True,
+            "light": False,
+            "standalone": True,
+        },
+    )
+    entry.add_to_hass(hass)
+    with patch("custom_components.duet3d.async_setup_entry", return_value=True):
+        flow = await hass.config_entries.options.async_init(entry.entry_id)
+        result = await hass.config_entries.options.async_configure(
+            flow["flow_id"],
+            {"update_interval": 20, "light": False, "standalone": True},
+        )
+        await hass.async_block_till_done()
+    assert result["type"] == "create_entry", result
+    assert entry.data["update_interval"] == 20
 
 
 async def test_submitting_the_form_creates_an_entry(hass):
@@ -92,7 +126,6 @@ async def test_submitting_the_form_creates_an_entry(hass):
                     "password": "",
                     "port": server.port,
                     "update_interval": 10,
-                    "number_of_tools": 1,
                     "standalone": True,
                 },
             )

@@ -1,6 +1,6 @@
 # Duet3D integration for Home Assistant
 
-This is a work in progress. Entities are created properly and values can be read from the `rr_model` (standalone) or `/machine/status` (SBC) endpoint of your Duet board. The integration is meant to use with RRF 3.4.5 and onwards.
+This is a work in progress. Entities are created properly and values can be read from the `rr_model` (standalone) or `/machine/status` (SBC) endpoint of your Duet board. Tools, bed and chamber are discovered from the object model. Tested against RRF 3.7.0-rc.2; see the README for details.
 Ensure to select the correct mode (Standalone vs SBC)
 
 ## Installation
@@ -8,13 +8,13 @@ Ensure to select the correct mode (Standalone vs SBC)
 ### From HACS
 
 1. Install HACS if you haven't already (see [installation guide](https://hacs.xyz/docs/configuration/basic)).
-2. Add custom repository `https://github.com/lyr3x/hass-Duet3D` as "Integration" in the settings tab of HACS.
+2. Add custom repository `https://github.com/jaysuk/hass-Duet3D` as "Integration" in the settings tab of HACS.
 3. Find and install "Duet3D" integration in HACS's "Integrations" tab.
 4. Restart your Home Assistant.
 
 ### Manual
 
-1. Download and unzip the [repo archive](https://github.com/lyr3x/hass-Duet3D/archive/master.zip). (You could also click "Download ZIP" after pressing the green button in the repo, alternatively, you could clone the repo from SSH add-on).
+1. Download and unzip the [repo archive](https://github.com/jaysuk/hass-Duet3D/archive/master.zip). (You could also click "Download ZIP" after pressing the green button in the repo, alternatively, you could clone the repo from SSH add-on).
 2. Copy contents of the archive/repo into your `/config` directory.
 3. Restart your Home Assistant.
 

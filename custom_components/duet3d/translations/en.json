@@ -8,8 +8,6 @@
           "port": "Port",
           "name": "Name",
           "update_interval": "Update interval (seconds)",
-          "number_of_tools": "Number of Tools",
-          "bed": "Hotbed installed",
           "light": "LED's installed",
           "led_strip_index": "LED strip index (default 0)",
           "led_count": "Number of LEDs",
@@ -35,7 +33,6 @@
         "title": "Duet3D Options",
         "data": {
           "update_interval": "Update interval (seconds)",
-          "bed": "Hotbed installed",
           "light": "LED's installed",
           "led_strip_index": "LED strip index (default 0)",
           "led_count": "Number of LEDs",
