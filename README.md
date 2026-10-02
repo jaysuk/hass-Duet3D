@@ -290,4 +290,9 @@ G-code can also be sent from automations; see [Actions](#actions).
 This fork is maintained by [@jaysuk](https://github.com/jaysuk). It is based on the original
 [Lyr3x/hass-Duet3D](https://github.com/Lyr3x/hass-Duet3D).
 
+# Licence
+The additions in this fork are released under the [MIT licence](LICENSE). The code it started
+from, in Lyr3x/hass-Duet3D, had no licence file when this fork was made, so the MIT licence
+cannot cover that original code on its own.
+
 Code initially based on the OctoPrint integration: [octoprint integration github](https://github.com/home-assistant/home-assistant/tree/dev/homeassistant/components/octoprint)
