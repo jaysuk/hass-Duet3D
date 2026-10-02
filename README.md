@@ -134,7 +134,7 @@ poll; nothing is shown optimistically.
 
 | Entity | Sends | Refused unless the printer is... |
 | --- | --- | --- |
-| `Pause`, `Resume`, `Cancel` buttons | `M25`, `M24`, `M0` | the same states as the actions below |
+| `Pause`, `Resume`, `Cancel` buttons | `M25`, `M24`, `M25` then `M0` | the same states as the actions below |
 | `Home all`, `Home X/Y/Z` buttons | `G28`, `G28 X`, ... (only for axes the printer has) | idle |
 | `Acknowledge message` button | `M292` | showing a message box |
 | `Emergency stop` button (**disabled by default**) | `M112` | never refused |
@@ -142,7 +142,7 @@ poll; nothing is shown optimistically.
 | `<Tool/Bed/Chamber> target` number | `M104 S.. T..`, `M140 P.. S..`, `M141 P.. S..` | any state, as in Duet Web Control. Maximum is the heater's limit less 15 °C (280 °C if the firmware reports none) |
 | `Speed factor` number | `M220 S..` (10-300 %) | any state |
 | `Extruder N flow` number | `M221 D.. S..` (10-300 %) | any state |
-| `<Fan name> control` fan | `M106 P.. S..` | any state. The percentage shown is what was asked for |
+| `<Fan name> control` fan | `M106 P.. S..` | any state. The percentage shown is what was asked for. A thermostatic fan has no control: the firmware ignores `M106 S` for it and drives it from temperature (its `speed` sensor stays) |
 | `Macro <name>` buttons (**disabled by default**) | `M98 P"0:/macros/<file>"` | idle |
 
 The speed, flow and target numbers sit alongside the read-only sensors of the same name
@@ -164,7 +164,7 @@ with the action's target (if you have only one printer you can leave the target 
 | `duet3d.home` (optional `axes`, such as `X, Y`) | `G28` | idle. Homing mid-job would crash the toolhead |
 | `duet3d.pause` | `M25` | running a job |
 | `duet3d.resume` | `M24` | paused |
-| `duet3d.cancel` | `M0` | running or paused. With no job, `M0` would still run `stop.g` |
+| `duet3d.cancel` | `M25`, then `M0` | running or paused. The firmware only cancels a paused job, so a running one is paused first and cancelled once the pause is done (up to 60 s, else an error and the job is left paused) |
 | `duet3d.acknowledge_message` (optional `cancel`) | `M292` / `M292 P1` | showing a message box |
 | `duet3d.emergency_stop` | `M112` | never refused |
 | `duet3d.reset_after_emergency_stop` | `M999` | halted |
@@ -219,27 +219,31 @@ Things that are deliberately not events:
   simulated print.
 - **Nothing on the first poll.** Home Assistant starting in the middle of a job adopts it
   silently and reports its end, with the job's whole extrusion.
-- A job that starts and ends between two polls cannot be seen.
+- A job that starts and ends between two polls cannot be seen, and neither can the end of
+  a job when the next one starts within one poll (a queue macro chaining jobs).
 
 Events are fired just after the entities have been updated from the same poll, so an
-automation that reacts to one reads current states. `Filament Extruded` keeps its last value
-after a job ends (it only drops to 0 when the next job starts), so a `utility_meter` fed by
-it does not lose the last interval to a reset.
+automation that reacts to one reads current states. `Filament Extruded` follows the job,
+keeps the job's final value for the poll that fires the end event, and is 0 from the next
+poll on. A `utility_meter` ignores a drop rather than treating it as a reset, so a value
+held until the next job would make it lose the start of that job.
 
 ## Webcam
 
 Set a webcam address in **Configure**. Left empty, the address in Duet Web Control's own
-settings (`0:/sys/dwc-settings.json`, `webcam.url` and `webcam.liveUrl`) is used when it is
-enabled there, read once when the integration loads. `{hostname}` in it is replaced by the
-printer's address. The `Webcam` camera is only created when an address is known. A snapshot
-address is read whole; an MJPEG stream address gives its first frame. The live stream
-address (`liveUrl` if there is one) is offered as the stream source.
+settings (`0:/sys/dwc-settings.json`, `webcam.url`) is used when it is enabled there, read
+once when the integration loads. `[HOSTNAME]` in it is replaced by the printer's address.
+The `Webcam` camera is only created when an address is known. A snapshot address is read
+whole; an MJPEG stream address gives its first frame. The address is offered as the stream
+source only when DWC shows it as a stream (its update interval is 0) or when it is the one
+set in Configure. DWC's `liveUrl` is the page opened by clicking the picture, not a stream,
+so it is ignored.
 
 ## Diagnostics
 
 **Download diagnostics** on the integration includes the firmware, mode, poll statistics,
 heater roles, hardware and the object model. The password, address, MAC, SSID, hostnames,
-board ID and file names are redacted.
+board ID, file names and the webcam address are redacted.
 
 ## Filament / spool tracking
 
@@ -251,7 +255,7 @@ standalone and SBC mode.
 | Entity | State | Notes |
 | --- | --- | --- |
 | `Extruder N` | Loaded filament name | One per extruder. Attributes: `name`, `type` (both the filament name), `extruder`, `tools`, `active` (this extruder belongs to the selected tool), `filament_diameter`, `position` |
-| `Filament Extruded` | mm | Filament extruded by the current job, before extrusion factors. Holds its last value after the job ends and resets when the next one starts |
+| `Filament Extruded` | mm | Filament extruded by the current job, before extrusion factors, net of retractions and without extrusion inside macros (purges, `M701` loads, `pause.g`). 0 outside a real job, simulations included; the job's final value is held for the poll that fires its end event |
 | `Current Tool` | tool number | `-1` when no tool is selected |
 
 The filament name is whatever `M701 S"PLA"` set. RepRapFirmware forgets it on
