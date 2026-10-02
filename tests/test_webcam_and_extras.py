@@ -35,8 +35,34 @@ def test_resolve_url(url, expected):
 
 
 def test_dwc_settings_with_a_webcam():
-    settings = {"webcam": {"enabled": True, "url": "http://{hostname}/s", "liveUrl": "http://{hostname}/l"}}
-    assert parse_dwc_settings(settings, "h", BASE) == {"url": "http://h/s", "live_url": "http://h/l"}
+    settings = {"webcam": {"enabled": True, "url": "http://[HOSTNAME]/s", "liveUrl": "http://x/l"}}
+    assert parse_dwc_settings(settings, "h", BASE) == {"url": "http://h/s", "stream": False}
+
+
+def test_dwc_placeholder_is_replaced_and_the_old_spelling_still_works():
+    assert resolve_url("http://[HOSTNAME]:8081/0/stream", "h", BASE) == "http://h:8081/0/stream"
+    assert resolve_url("http://{hostname}/x", "h", BASE) == "http://h/x"
+
+
+@pytest.mark.parametrize("interval, stream", [(0, True), (5000, False), (None, False), (False, False)])
+def test_an_update_interval_of_zero_means_dwc_shows_a_stream(interval, stream):
+    settings = {"webcam": {"enabled": True, "url": "http://h/s", "updateInterval": interval}}
+    assert parse_dwc_settings(settings, "h", BASE)["stream"] is stream
+
+
+def test_live_url_is_ignored():
+    settings = {"webcam": {"enabled": True, "url": "http://h/s", "liveUrl": "http://h/click"}}
+    assert parse_dwc_settings(settings, "h", BASE) == {"url": "http://h/s", "stream": False}
+
+
+def test_old_nested_dwc_settings_are_merged_machine_over_main():
+    settings = {
+        "main": {"webcam": {"enabled": True, "url": "http://main/s", "updateInterval": 5000}},
+        "machine": {"webcam": {"enabled": True, "url": "http://machine/s", "updateInterval": 0}},
+    }
+    assert parse_dwc_settings(settings, "h", BASE) == {"url": "http://machine/s", "stream": True}
+    only_main = {"main": settings["main"], "machine": {}}
+    assert parse_dwc_settings(only_main, "h", BASE) == {"url": "http://main/s", "stream": False}
 
 
 @pytest.mark.parametrize(
@@ -45,7 +71,7 @@ def test_dwc_settings_with_a_webcam():
      {"webcam": {"enabled": True, "url": "", "liveUrl": ""}}],
 )
 def test_dwc_settings_without_a_usable_webcam(settings):
-    assert parse_dwc_settings(settings, "h", BASE) == {"url": None, "live_url": None}
+    assert parse_dwc_settings(settings, "h", BASE) == {"url": None, "stream": False}
 
 
 def test_first_jpeg_finds_a_frame_inside_a_stream_slice():
@@ -81,7 +107,7 @@ async def test_the_address_is_found_in_the_dwc_settings(hass, fake_duet):
         "webcam": {
             "enabled": True,
             "url": f"http://{{hostname}}:{fake_duet.port}/webcam/snapshot",
-            "liveUrl": f"http://{{hostname}}:{fake_duet.port}/webcam/stream",
+            "updateInterval": 0,
         }
     }
     entry = await setup_entry(hass, fake_duet)
@@ -89,7 +115,7 @@ async def test_the_address_is_found_in_the_dwc_settings(hass, fake_duet):
     assert entity_id
     assert (await async_get_image(hass, entity_id)).content == FRAME
     coordinator = hass.data[DOMAIN][entry.entry_id]["coordinator"]
-    assert coordinator.webcam_live_url == f"http://{fake_duet.host}:{fake_duet.port}/webcam/stream"
+    assert coordinator.webcam_live_url == f"http://{fake_duet.host}:{fake_duet.port}/webcam/snapshot"
 
 
 async def test_the_option_wins_over_dwc(hass, fake_duet):

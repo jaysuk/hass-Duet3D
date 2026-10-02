@@ -32,6 +32,9 @@ TO_REDACT = {
     "lastFileName",
     "file_name",
     "thumbnails",
+    # a camera address can carry a user name and password
+    "webcam_url",
+    "url",
 }
 # ``network.name`` is the board's hostname, but ``name`` elsewhere is a fan or tool
 # label, so that one is redacted by position, below.
@@ -67,6 +70,7 @@ async def async_get_config_entry_diagnostics(
             ),
             "printer_online": coordinator.printer_online,
         },
+        "extruded_mm": coordinator.extruded_mm,
         "heater_roles": coordinator.heater_roles,
         "hardware": coordinator.hardware,
         "macro_count": len(coordinator.macros),

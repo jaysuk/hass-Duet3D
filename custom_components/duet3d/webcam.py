@@ -18,12 +18,12 @@ _JPEG_END = b"\xff\xd9"
 def resolve_url(url: Any, host: str, base_url: str) -> str | None:
     """A usable absolute URL from what DWC stored, or ``None``.
 
-    DWC accepts ``{hostname}`` as a placeholder for the address the page was loaded
-    from, and users also type paths relative to the board.
+    DWC's placeholder for the address the page was loaded from is ``[HOSTNAME]``
+    (``{hostname}`` is accepted too), and users also type paths relative to the board.
     """
     if not isinstance(url, str):
         return None
-    url = url.strip().replace("{hostname}", host)
+    url = url.strip().replace("[HOSTNAME]", host).replace("{hostname}", host)
     if not url:
         return None
     if url.startswith("/"):
@@ -33,18 +33,31 @@ def resolve_url(url: Any, host: str, base_url: str) -> str | None:
     return None
 
 
-def parse_dwc_settings(settings: Any, host: str, base_url: str) -> dict[str, str | None]:
-    """``{"url": ..., "live_url": ...}`` from DWC's settings, both ``None`` when unset.
+def parse_dwc_settings(settings: Any, host: str, base_url: str) -> dict[str, Any]:
+    """``{"url": ..., "stream": ...}`` from DWC's settings; ``url`` is ``None`` when unset.
+
+    ``stream`` is True when DWC shows ``url`` as a live stream, which it does when the
+    update interval is 0. DWC's ``liveUrl`` is only the page opened by clicking the
+    image, so it is ignored.
 
     A webcam DWC has switched off (``enabled: false``) is treated as not there: its
-    address is usually left over from one that has since been taken down.
+    address is usually left over from one that has since been taken down. Old DWC
+    versions nest the settings under ``main`` and then ``machine``, the latter
+    overriding the former, as DWC does.
     """
+    if isinstance(settings, dict) and isinstance(settings.get("main"), dict):
+        merged = dict(settings["main"])
+        machine = settings.get("machine")
+        if isinstance(machine, dict):
+            merged.update(machine)
+        settings = merged
     webcam = settings.get("webcam") if isinstance(settings, dict) else None
     if not isinstance(webcam, dict) or webcam.get("enabled") is False:
-        return {"url": None, "live_url": None}
+        return {"url": None, "stream": False}
+    interval = webcam.get("updateInterval")
     return {
         "url": resolve_url(webcam.get("url"), host, base_url),
-        "live_url": resolve_url(webcam.get("liveUrl"), host, base_url),
+        "stream": interval == 0 and not isinstance(interval, bool),
     }
 
 

@@ -140,14 +140,14 @@ async def test_events_are_fired_after_the_entities_show_the_poll(hass, fake_duet
             (
                 event.data["type"],
                 state_of(hass, entry, "Current State").state,
-                state_of(hass, entry, "Filament Extruded").state,
+                float(state_of(hass, entry, "Filament Extruded").state),
             )
         ),
     )
     await step(hass, entry, fake_duet, "processing", extruded=800)
     await step(hass, entry, fake_duet, "idle")
     await hass.async_block_till_done()
-    assert seen == [("job_finished", "idle", "800")]
+    assert seen == [("job_finished", "idle", 800)]
 
 
 async def test_message_box_and_halt_events(hass, fake_duet):
@@ -161,30 +161,28 @@ async def test_message_box_and_halt_events(hass, fake_duet):
     assert events[0]["message"] == "Change filament"
 
 
-# --- extrusion latch ---------------------------------------------------------
+# --- Filament Extruded -------------------------------------------------------
 
 
-async def test_filament_extruded_keeps_the_last_value_until_the_next_job_starts(hass, fake_duet):
+async def test_filament_extruded_holds_the_total_for_the_end_poll_only(hass, fake_duet):
     entry = await setup_entry(hass, fake_duet)
     await step(hass, entry, fake_duet, "processing", extruded=0)
     await step(hass, entry, fake_duet, "processing", extruded=2500.25)
-    assert state_of(hass, entry, "Filament Extruded").state == "2500.25"
+    assert float(state_of(hass, entry, "Filament Extruded").state) == 2500.25
 
-    # the firmware reports null as soon as the job ends, but a meter must see the total
+    # the firmware reports null as soon as the job ends, but the print-end automation
+    # reads the total on the poll that fires job_finished
     await step(hass, entry, fake_duet, "idle")
-    assert state_of(hass, entry, "Filament Extruded").state == "2500.25"
+    assert float(state_of(hass, entry, "Filament Extruded").state) == 2500.25
+    # after that it is 0, so that the next job counts from 0 in a utility meter
     await step(hass, entry, fake_duet, "idle")
-    assert state_of(hass, entry, "Filament Extruded").state == "2500.25"
-
-    # the next job's first reading is the reset
-    await step(hass, entry, fake_duet, "processing", extruded=0)
-    assert state_of(hass, entry, "Filament Extruded").state == "0"
+    assert float(state_of(hass, entry, "Filament Extruded").state) == 0
 
 
 async def test_filament_extruded_is_zero_before_any_job(hass, fake_duet):
     fake_duet.model["job"]["rawExtrusion"] = None
     entry = await setup_entry(hass, fake_duet)
-    assert state_of(hass, entry, "Filament Extruded").state == "0"
+    assert float(state_of(hass, entry, "Filament Extruded").state) == 0
 
 
 # --- device triggers ---------------------------------------------------------

@@ -32,6 +32,8 @@ def build_fans(fans: Any) -> dict[str, dict[str, Any]]:
         if not isinstance(fan, dict):
             continue
         rpm = as_number(fan.get("rpm"))
+        thermostatic = fan.get("thermostatic")
+        sensors = thermostatic.get("sensors") if isinstance(thermostatic, dict) else None
         result[f"fan-{index}"] = {
             "index": index,
             "label": _text(fan.get("name")) or f"Fan {index}",
@@ -39,6 +41,8 @@ def build_fans(fans: Any) -> dict[str, dict[str, Any]]:
             "requested": _percent(fan.get("requestedValue")),
             # -1 means the fan has no tacho
             "rpm": rpm if rpm is not None and rpm >= 0 else None,
+            # The firmware drives a thermostatic fan from temperature and ignores M106 S.
+            "thermostatic": isinstance(sensors, list) and len(sensors) > 0,
         }
     return result
 

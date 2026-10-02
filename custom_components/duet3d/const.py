@@ -13,7 +13,7 @@ ATTR_GCODE = "gcode"
 CONF_SBC_API = "/machine"
 CONF_SBC_STATUS_PATH = "/status"
 CONF_SBC_GCODE_PATH = "/code"
-CONF_JSON_HEADER = {"CONTENT_TYPE": "CONTENT_TYPE_JSON"}
+CONF_JSON_HEADER = {"Accept": "application/json"}
 CONF_TEXT_PLAIN_HEADER = {"Content-Type": "text/plain"}
 CONF_STANDALONE_API = "/rr_model"
 CONF_STANDALONE_GCODE_PATH = "/rr_gcode"
@@ -65,6 +65,7 @@ STANDALONE_SLOW_POLL_KEYS = ("boards", "network", "volumes")
 STANDALONE_SLOW_POLL_SECONDS = 60
 STANDALONE_POLL_FLAGS = "d99vn"
 MACRO_DIRECTORY = "0:/macros"
+FILAMENT_DIRECTORY = "0:/filaments"
 FIRMWARE_RELEASES_URL = "https://api.github.com/repos/Duet3D/RepRapFirmware/releases/latest"
 # Polls that may fail in a row before entities go unavailable (the last data is kept).
 TOLERATED_FAILED_POLLS = 2

@@ -285,6 +285,7 @@ async def test_macros_are_only_listed_once_a_minute(hass, fake_duet):
 
 async def test_load_filament_runs_m701_for_the_selected_tool(hass, fake_duet):
     fake_duet.model["state"]["currentTool"] = 0
+    fake_duet.files["0:/filaments"] = [{"type": "d", "name": "PLA"}]
     await setup_entry(hass, fake_duet)
     await hass.services.async_call(DOMAIN, "load_filament", {"tool": 0, "filament": "PLA"}, blocking=True)
     assert fake_duet.gcodes == ['M701 S"PLA"']

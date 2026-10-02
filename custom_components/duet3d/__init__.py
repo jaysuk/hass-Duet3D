@@ -14,7 +14,11 @@ from homeassistant.helpers.update_coordinator import (
 from homeassistant.core import callback
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
+from homeassistant.exceptions import (
+    ConfigEntryAuthFailed,
+    ConfigEntryNotReady,
+    HomeAssistantError,
+)
 import homeassistant.util.dt as dt_util
 from typing import cast
 from yarl import URL
@@ -22,7 +26,7 @@ from yarl import URL
 from datetime import timedelta
 
 
-from .events import JobTracker
+from .events import JOB_END_TYPES, JobTracker, extruded_reading
 from .hardware import build_hardware
 from .webcam import DWC_SETTINGS_PATH, parse_dwc_settings
 from .model import build_heater_roles, resolve, set_path
@@ -90,11 +94,6 @@ def ensure_valid_path(value):
     return value
 
 
-async def options_update_listener(hass: HomeAssistant, config_entry: ConfigEntry):
-    """Handle options update."""
-    await hass.config_entries.async_reload(config_entry.entry_id)
-
-
 async def async_setup(hass, config):
     """Legacy way to set up Duet3D component from YAML."""
     return True
@@ -115,26 +114,16 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry):
         await coordinator.async_close_session()
         raise
 
-    # Extract firmware and board info from the first successful data fetch
-    try:
-        if config_entry.data[CONF_STANDALONE]:
-            _LOGGER.info("Using standalone mode")
-            # boards[0] is the main board; expansion boards follow it.
-            coordinator.firmware_version = coordinator.get_sensor_state(
-                "status.boards[0].firmwareVersion"
-            )
-            coordinator.board_model = coordinator.get_sensor_state("status.boards[0].name")
-        else:
-            status = coordinator.data.get("status")
-            if status:
-                coordinator.firmware_version = coordinator.get_value_from_json(
-                    status, "boards", "software", "firmwareVersion", None
-                )
-                coordinator.board_model = coordinator.get_value_from_json(
-                    status, "boards", "software", "model", None
-                )
-    except (KeyError, TypeError):
-        _LOGGER.error("Failed to extract firmware/board data")
+    # boards[0] is the main board; expansion boards follow it. In SBC mode the model is
+    # the board's short name, as DSF reports it.
+    coordinator.firmware_version = coordinator.get_sensor_state(
+        "status.boards[0].firmwareVersion"
+    )
+    coordinator.board_model = coordinator.get_sensor_state(
+        "status.boards[0].name"
+        if config_entry.data[CONF_STANDALONE]
+        else "status.boards[0].shortName"
+    )
 
     await coordinator.async_detect_webcam()
 
@@ -169,6 +158,8 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         self, hass: HomeAssistant, config_entry: ConfigEntry, interval: int
     ) -> None:
         """Initialize Duet3D API and set headers needed later."""
+        # An entry saved with 0 must not poll non-stop.
+        interval = max(1, interval)
         super().__init__(
             hass,
             _LOGGER,
@@ -189,8 +180,11 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         # (so unknown after a restart of Home Assistant until the next job).
         self.job_started_at = None
         self.job_ended_at = None
-        # Webcam addresses found in Duet Web Control's settings (see detect_webcam).
-        self.detected_webcam: dict[str, str | None] = {"url": None, "live_url": None}
+        # What the Filament Extruded sensor shows, in mm (see events.extruded_reading).
+        self.extruded_mm = 0.0
+        # The webcam found in Duet Web Control's settings: its address, and whether DWC
+        # shows it as a live stream (see webcam.parse_dwc_settings).
+        self.detected_webcam: dict = {"url": None, "stream": False}
         self._pending_events: list[dict] = []
         self.config_entry = config_entry
         self.printer_online = False
@@ -223,6 +217,7 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         self._password = config_entry.data.get(CONF_PASSWORD, "")
         self._session: aiohttp.ClientSession | None = None
         self._authenticated = False
+        self._session_key: str | None = None  # SBC mode: sent as X-Session-Key
         self.firmware_version = None
         self.board_model = None
 
@@ -231,13 +226,29 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         if self._session is None or self._session.closed:
             self._session = aiohttp.ClientSession()
             self._authenticated = False
+            self._session_key = None
         return self._session
 
-    async def _ensure_authenticated(self):
-        """Authenticate with the printer if using standalone mode with a password."""
-        if not self.config_entry.data[CONF_STANDALONE]:
-            return
-        if not self._password:
+    @property
+    def last_poll_ok(self) -> bool:
+        """Whether the latest poll worked, as opposed to the data being kept from an earlier one."""
+        return self._failed_polls == 0
+
+    def _headers(self, headers: dict) -> dict:
+        if self._session_key:
+            return {**headers, "X-Session-Key": self._session_key}
+        return headers
+
+    async def _ensure_authenticated(self, force: bool = False):
+        """Log in to a board that has a password.
+
+        Standalone boards use ``rr_connect``, DSF (SBC mode) ``/machine/connect``. With
+        no password configured nothing is done, except that a DSF which answered 401
+        is asked for a session anyway (``force``), so that a password it turns out to
+        need is reported as a rejected one.
+        """
+        standalone = self.config_entry.data[CONF_STANDALONE]
+        if not self._password and (standalone or not force):
             return
         if self._authenticated:
             return
@@ -246,24 +257,10 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         rejected = False
         try:
             async with asyncio.timeout(10):
-                async with session.get(
-                    f"{self.base_url}/rr_connect",
-                    params={"password": self._password},
-                    headers=CONF_JSON_HEADER,
-                ) as resp:
-                    resp.raise_for_status()
-                    data = await resp.json()
-                    if data.get("err", 1) == 0:
-                        self._authenticated = True
-                        _LOGGER.debug("Authenticated with printer")
-                    elif data.get("err") == 1:
-                        # err 1 is "wrong password". (Other errors, such as err 2, no
-                        # free session, are the board's trouble and may pass.)
-                        rejected = True
-                    else:
-                        _LOGGER.error(
-                            "Authentication failed (err=%s)", data.get("err")
-                        )
+                if standalone:
+                    rejected = await self._connect_standalone(session)
+                else:
+                    rejected = await self._connect_sbc(session)
         except Exception as exc:
             _LOGGER.error("Could not authenticate with printer: %s", exc)
             self._authenticated = False
@@ -271,12 +268,79 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
             self._authenticated = False
             raise ConfigEntryAuthFailed("The board rejected the password")
 
+    async def _connect_standalone(self, session) -> bool:
+        """Log in with ``rr_connect``. True when the board rejected the password."""
+        async with session.get(
+            f"{self.base_url}/rr_connect",
+            params={"password": self._password},
+            headers=CONF_JSON_HEADER,
+        ) as resp:
+            resp.raise_for_status()
+            data = await resp.json()
+            if data.get("err", 1) == 0:
+                self._authenticated = True
+                _LOGGER.debug("Authenticated with printer")
+            elif data.get("err") == 1:
+                # err 1 is "wrong password". (Other errors, such as err 2, no
+                # free session, are the board's trouble and may pass.)
+                return True
+            else:
+                _LOGGER.error("Authentication failed (err=%s)", data.get("err"))
+        return False
+
+    async def _connect_sbc(self, session) -> bool:
+        """Log in with DSF's ``/machine/connect``. True when DSF rejected the password."""
+        async with session.get(
+            f"{self.base_url}{CONF_SBC_API}/connect",
+            params={"password": self._password},
+            headers=CONF_JSON_HEADER,
+        ) as resp:
+            if resp.status == 403:
+                return True
+            resp.raise_for_status()
+            data = await resp.json(content_type=None)
+            key = data.get("sessionKey") if isinstance(data, dict) else None
+            if key:
+                self._session_key = key
+                self._authenticated = True
+                _LOGGER.debug("Authenticated with DSF")
+            else:
+                _LOGGER.error("DSF gave no session key")
+        return False
+
     async def async_close_session(self):
         """Close the aiohttp session."""
         if self._session and not self._session.closed:
             await self._session.close()
             self._session = None
             self._authenticated = False
+            self._session_key = None
+
+    async def _request(
+        self, method: str, url: str, read, *, params=None, data=None, headers=None, timeout=10
+    ):
+        """One request, logging in again once if the session has expired.
+
+        ``read`` turns the response into the value returned.
+        """
+        await self._ensure_authenticated()
+        session = await self._get_session()
+        for attempt in (0, 1):
+            async with asyncio.timeout(timeout):
+                async with session.request(
+                    method,
+                    url,
+                    params=params,
+                    data=data,
+                    headers=self._headers(headers or CONF_JSON_HEADER),
+                ) as response:
+                    if response.status == 401 and attempt == 0:
+                        _LOGGER.debug("Session expired, re-authenticating")
+                        self._authenticated = False
+                        await self._ensure_authenticated(force=True)
+                        continue
+                    response.raise_for_status()
+                    return await read(response)
 
     async def get_status(self, key=None, flags=None):
         """Send a get request, and return the response as a dict."""
@@ -288,29 +352,11 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
             url = self.status_api_url
         _LOGGER.debug("URL: %s", url)
 
-        await self._ensure_authenticated()
-        session = await self._get_session()
-
         try:
-            async with asyncio.timeout(10):
-                async with session.get(url, headers=CONF_JSON_HEADER) as response:
-                    if response.status == 401:
-                        # Session expired, re-authenticate and retry once
-                        _LOGGER.debug("Session expired, re-authenticating")
-                        self._authenticated = False
-                        await self._ensure_authenticated()
-                        async with session.get(
-                            url, headers=CONF_JSON_HEADER
-                        ) as retry_resp:
-                            retry_resp.raise_for_status()
-                            data = await retry_resp.json()
-                    else:
-                        response.raise_for_status()
-                        data = await response.json()
-
-                    self.printer_online = True
-                    self.status_error_logged = False
-                    return data
+            data = await self._request("GET", url, lambda response: response.json())
+            self.printer_online = True
+            self.status_error_logged = False
+            return data
         except aiohttp.ClientConnectorError as conn_exc:
             if not self.status_error_logged:
                 _LOGGER.error("Failed to connect to Duet3D board: %s", conn_exc)
@@ -323,36 +369,36 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
             self.printer_online = False
             raise UpdateFailed(exc) from exc
 
-    async def send_gcode(self, gcode: str) -> str | None:
-        """Send G-code to the printer (used by service handler)."""
-        await self._ensure_authenticated()
-        session = await self._get_session()
+    async def send_gcode(self, gcode: str, wait: bool = False) -> str | None:
+        """Send G-code to the printer (used by service handler).
 
+        A standalone board's reply cannot be read (see CLAUDE.md), so ``wait`` only
+        matters in SBC mode. There ``wait=True`` reads DSF's reply, and an ``Error:``
+        line in it is raised; ``wait=False`` queues the code (``async=true``) and
+        returns at once, which is what anything that runs a macro or takes longer
+        than the request timeout needs.
+        """
         if self.config_entry.data[CONF_STANDALONE]:
-            url = f"{self.base_url}{CONF_STANDALONE_GCODE_PATH}"
-            params = {"gcode": gcode}
-            async with asyncio.timeout(10):
-                async with session.get(
-                    url, params=params, headers=CONF_TEXT_PLAIN_HEADER
-                ) as response:
-                    if response.status == 401:
-                        self._authenticated = False
-                        await self._ensure_authenticated()
-                        async with session.get(
-                            url, params=params, headers=CONF_TEXT_PLAIN_HEADER
-                        ) as retry_resp:
-                            retry_resp.raise_for_status()
-                            return await retry_resp.text()
-                    response.raise_for_status()
-                    return await response.text()
-        else:
-            url = f"{self.base_url}{CONF_SBC_API}{CONF_SBC_GCODE_PATH}"
-            async with asyncio.timeout(10):
-                async with session.post(
-                    url, data=gcode, headers=CONF_TEXT_PLAIN_HEADER
-                ) as response:
-                    response.raise_for_status()
-                    return await response.text()
+            return await self._request(
+                "GET",
+                f"{self.base_url}{CONF_STANDALONE_GCODE_PATH}",
+                lambda response: response.text(),
+                params={"gcode": gcode},
+                headers=CONF_TEXT_PLAIN_HEADER,
+            )
+        reply = await self._request(
+            "POST",
+            f"{self.base_url}{CONF_SBC_API}{CONF_SBC_GCODE_PATH}",
+            lambda response: response.text(),
+            params=None if wait else {"async": "true"},
+            data=gcode,
+            headers=CONF_TEXT_PLAIN_HEADER,
+        )
+        if wait:
+            for line in (reply or "").splitlines():
+                if line.startswith("Error:"):
+                    raise HomeAssistantError(line)
+        return reply
 
     async def _async_update_data(self):
         """Update printer data via API.
@@ -384,17 +430,33 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
                 events = self.tracker.update(data["status"])
                 self._pending_events.extend(events)
                 self._track_job_times(events, data)
+                self.extruded_mm = extruded_reading(
+                    self.extruded_mm,
+                    resolve(data, "status.job.rawExtrusion"),
+                    self.tracker.in_job,
+                    any(event["type"] in JOB_END_TYPES for event in events),
+                )
             except Exception:  # pylint: disable=broad-except
                 # Events are a convenience: never let them cost the readings.
                 _LOGGER.exception("Could not work out job events from the last poll")
+            self._sync_firmware(data)
         return data
+
+    def _sync_firmware(self, data: dict) -> None:
+        """Follow a firmware update: the version shown is the one the board reports."""
+        version = resolve(data, "status.boards[0].firmwareVersion")
+        if not isinstance(version, str) or version == self.firmware_version:
+            return
+        self.firmware_version = version
+        if (device := self._device()) is not None:
+            dr.async_get(self.hass).async_update_device(device.id, sw_version=version)
 
     def _track_job_times(self, events: list[dict], data: dict) -> None:
         now = data["last_read_time"]
         for event in events:
             if event["type"] == "job_started":
                 self.job_started_at, self.job_ended_at = now, None
-            elif event["type"] in ("job_finished", "job_cancelled", "job_failed"):
+            elif event["type"] in JOB_END_TYPES:
                 self.job_ended_at = now
         if self.tracker.in_job and self.job_started_at is None:
             # A job already running when we started watching: work back from its duration.
@@ -421,19 +483,23 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         super().async_update_listeners()
         self._fire_events()
 
+    def _device(self):
+        """This printer's entry in the device registry, once it has one."""
+        registry = dr.async_get(self.hass)
+        identifier = (DOMAIN, cast(str, self.config_entry.unique_id))
+        if hasattr(registry, "async_get_device_by_identifier"):
+            return registry.async_get_device_by_identifier(
+                identifier, self.config_entry.entry_id
+            )
+        # Home Assistant before the lookup was scoped to a config entry
+        return registry.async_get_device(identifiers={identifier})
+
     @callback
     def _fire_events(self) -> None:
         events, self._pending_events = self._pending_events, []
         if not events:
             return
-        registry = dr.async_get(self.hass)
-        identifier = (DOMAIN, cast(str, self.config_entry.unique_id))
-        if hasattr(registry, "async_get_device_by_identifier"):
-            device = registry.async_get_device_by_identifier(
-                identifier, self.config_entry.entry_id
-            )
-        else:  # Home Assistant before the lookup was scoped to a config entry
-            device = registry.async_get_device(identifiers={identifier})
+        device = self._device()
         for event in events:
             self.hass.bus.async_fire(
                 EVENT_NAME,
@@ -472,20 +538,9 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def fetch_json(self, url: str, params: dict | None = None):
         """GET ``url`` and decode the JSON, logging in again once if the session expired."""
-        await self._ensure_authenticated()
-        session = await self._get_session()
-        async with asyncio.timeout(10):
-            async with session.get(url, params=params, headers=CONF_JSON_HEADER) as response:
-                if response.status == 401:
-                    self._authenticated = False
-                    await self._ensure_authenticated()
-                    async with session.get(
-                        url, params=params, headers=CONF_JSON_HEADER
-                    ) as retry:
-                        retry.raise_for_status()
-                        return await retry.json(content_type=None)
-                response.raise_for_status()
-                return await response.json(content_type=None)
+        return await self._request(
+            "GET", url, lambda response: response.json(content_type=None), params=params
+        )
 
     @property
     def webcam_url(self) -> str | None:
@@ -494,10 +549,10 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
 
     @property
     def webcam_live_url(self) -> str | None:
-        """The address to stream from: DWC's live address if it has one."""
+        """The address to stream from: the one in the options, or DWC's when it shows a stream."""
         if self.config_entry.data.get(CONF_WEBCAM_URL):
             return self.config_entry.data[CONF_WEBCAM_URL]
-        return self.detected_webcam["live_url"] or self.detected_webcam["url"]
+        return self.detected_webcam["url"] if self.detected_webcam["stream"] else None
 
     async def async_detect_webcam(self) -> None:
         """Read the webcam address from DWC's settings file on the board, if there is one."""
@@ -531,32 +586,35 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
             return
         self._macros_fetched_at = now
         try:
-            self.macros = await self._list_macros()
+            self.macros = await self.list_directory(MACRO_DIRECTORY, "f")
         except Exception as exc:  # pylint: disable=broad-except
             _LOGGER.debug("Could not list %s: %s", MACRO_DIRECTORY, exc)
 
-    async def _list_macros(self) -> list[str]:
+    async def list_directory(self, path: str, kind: str) -> list[str]:
+        """Names of the entries of type ``kind`` (``f`` file, ``d`` directory) in ``path``.
+
+        Raises when the board cannot be asked; a directory that does not exist is empty.
+        """
+        def wanted(entry) -> bool:
+            return (
+                isinstance(entry, dict)
+                and entry.get("type") == kind
+                and isinstance(entry.get("name"), str)
+            )
+
         if not self.config_entry.data[CONF_STANDALONE]:
-            listing = await self.fetch_json(
-                f"{self.base_url}{CONF_SBC_API}/directory/{MACRO_DIRECTORY}"
-            )
+            listing = await self.fetch_json(f"{self.base_url}{CONF_SBC_API}/directory/{path}")
             entries = listing if isinstance(listing, list) else []
-            return sorted(
-                e["name"] for e in entries
-                if isinstance(e, dict) and e.get("type") == "f" and isinstance(e.get("name"), str)
-            )
+            return sorted(e["name"] for e in entries if wanted(e))
         names: list[str] = []
         first = 0
         for _ in range(100):  # a page holds a few dozen entries; never loop forever
             page = await self.fetch_json(
-                f"{self.base_url}/rr_filelist", {"dir": MACRO_DIRECTORY, "first": first}
+                f"{self.base_url}/rr_filelist", {"dir": path, "first": first}
             )
             if not isinstance(page, dict) or page.get("err"):
                 break
-            names.extend(
-                e["name"] for e in page.get("files") or []
-                if isinstance(e, dict) and e.get("type") == "f" and isinstance(e.get("name"), str)
-            )
+            names.extend(e["name"] for e in page.get("files") or [] if wanted(e))
             first = page.get("next") or 0
             if not first:
                 break
@@ -593,11 +651,3 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
             sw_version=self.firmware_version,
             configuration_url=str(configuration_url),
         )
-
-    def get_value_from_json(self, json_dict, end_point, sensor_type, group, tool):
-        """Return the value for sensor_type from the JSON."""
-        if end_point == "boards":
-            if group == "firmwareVersion":
-                return json_dict[end_point][0]["firmwareVersion"]
-            if group == "model":
-                return json_dict[end_point][0]["shortName"]

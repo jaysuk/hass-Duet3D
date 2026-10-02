@@ -54,7 +54,9 @@ def _schema_with_defaults(
             vol.Required(CONF_HOST, default=host): str,
             vol.Optional(CONF_PASSWORD, default=password): str,
             vol.Required(CONF_PORT, default=port): cv.port,
-            vol.Required(CONF_INTERVAL, default=update_interval): int,
+            vol.Required(CONF_INTERVAL, default=update_interval): vol.All(
+                vol.Coerce(int), vol.Range(min=1)
+            ),
         },
     )
 
@@ -251,7 +253,7 @@ class Duet3dOptionsFlow(config_entries.OptionsFlow):
                     default=config_options.get(
                         CONF_INTERVAL, config_data.get(CONF_INTERVAL)
                     ),
-                ): cv.positive_int,
+                ): vol.All(vol.Coerce(int), vol.Range(min=1)),
                 vol.Optional(
                     CONF_PRINTING_INTERVAL,
                     default=config_data.get(

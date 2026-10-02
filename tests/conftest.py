@@ -56,5 +56,19 @@ async def fake_duet():
     from fake_duet import start_server
 
     server = await start_server()
+    server.expect_refusals = False
+    yield server
+    await server.close()
+    # The firmware would have ignored these; no code the integration sends may be one.
+    if not server.expect_refusals:
+        assert server.refused == []
+
+
+@pytest.fixture
+async def fake_dsf():
+    """A fake DSF (SBC mode) whose model tests can mutate."""
+    from fake_duet import start_sbc_server
+
+    server = await start_sbc_server()
     yield server
     await server.close()

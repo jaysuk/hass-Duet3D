@@ -111,16 +111,16 @@ async def test_resume_is_refused_unless_paused(hass, fake_duet, state):
     assert fake_duet.gcodes == []
 
 
-@pytest.mark.parametrize("state", ["processing", "simulating", "paused", "pausing", "resuming"])
-async def test_cancel_an_active_job(hass, fake_duet, state):
+async def test_cancel_a_paused_job_sends_only_m0(hass, fake_duet):
     await setup_entry(hass, fake_duet)
-    status(fake_duet, state)
+    status(fake_duet, "paused")
     await call(hass, "cancel")
     assert fake_duet.gcodes == ["M0"]
+    assert fake_duet.refused == []
 
 
 async def test_cancel_with_no_job_does_not_run_stop_g(hass, fake_duet):
-    """M0 with nothing printing would still run stop.g (heaters off, park), so refuse."""
+    """M0 with nothing printing is an error in the firmware (it only cancels a paused print), so refuse."""
     await setup_entry(hass, fake_duet)
     with pytest.raises(ServiceValidationError, match="idle"):
         await call(hass, "cancel")

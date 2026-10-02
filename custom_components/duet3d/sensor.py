@@ -25,7 +25,7 @@ from . import DuetDataUpdateCoordinator
 from .entity import add_dynamic
 from .extruders import build_extruders, slicer_filament
 from .hardware import message_box
-from .jobinfo import build_objects, eta, projected_total_minutes, slicer_total
+from .jobinfo import build_objects, eta, progress_percent, projected_total_minutes, slicer_total
 from .model import as_number, heater_power, heater_state, heater_value
 
 _LOGGER = logging.getLogger(__name__)
@@ -273,26 +273,10 @@ class DuetPrintJobPercentageSensor(DuetPrintSensorBase):
     @property
     def native_value(self):
         """Return sensor state."""
-        filament_info_json_path = SENSOR_TYPES["Progress"]["json_path"]
-        job_printed_filament_json_path = SENSOR_TYPES["Filament Extrusion"]["json_path"]
-        job_printed_filament = self.coordinator.get_sensor_state(
-            job_printed_filament_json_path, "Filament Extrusion"
+        return progress_percent(
+            self.coordinator.get_sensor_state(SENSOR_TYPES["Filament Extrusion"]["json_path"]),
+            self.coordinator.get_sensor_state(SENSOR_TYPES["Progress"]["json_path"]),
         )
-        filament_info = self.coordinator.get_sensor_state(
-            filament_info_json_path, "Progress"
-        )
-
-        if filament_info:
-            job_total_mm_of_filament = filament_info[0]
-        else:
-            return 0
-        if job_printed_filament is not None and job_total_mm_of_filament is not None:
-            progress_percentage = (
-                job_printed_filament / job_total_mm_of_filament
-            ) * 100
-            return round(progress_percentage, 2)
-        else:
-            return 0
 
 
 class DuetTimeRemainingSensor(DuetPrintSensorBase):
@@ -628,11 +612,12 @@ class DuetExtruderSensor(DuetPrintSensorBase):
 class DuetFilamentExtrudedSensor(DuetPrintSensorBase):
     """Filament extruded by the current job, before extrusion factors, in mm.
 
-    The firmware reports nothing once the job ends, so this keeps the last reading
-    until the next job starts. If it fell to 0 in the same poll that says ``idle``,
-    a ``utility_meter`` fed by it would see a reset and lose everything extruded
-    since the previous poll. It is a ``total_increasing`` sensor: the drop when the
-    next job starts is the reset.
+    The coordinator works the value out once per poll (``events.extruded_reading``): it
+    follows ``job.rawExtrusion`` during a real job, holds the final value for the poll
+    that ends the job so the print-end automation reads all of it, and is 0 otherwise,
+    simulations included. A ``utility_meter`` ignores a drop rather than treating it as
+    a reset, so a value latched until the next job would make it throw away that job's
+    first reading; falling to 0 right after the job lets every job count from 0.
     """
 
     _attr_native_unit_of_measurement = "mm"
@@ -648,17 +633,11 @@ class DuetFilamentExtrudedSensor(DuetPrintSensorBase):
             sensor_name,
             f"{sensor_name}-{device_id}",
         )
-        self._latched: float | None = None
 
     @property
     def native_value(self):
         """Return sensor state."""
-        extruded = self.coordinator.get_sensor_state(
-            SENSOR_TYPES["Filament Extrusion"]["json_path"], "Filament Extrusion"
-        )
-        if isinstance(extruded, (int, float)) and not isinstance(extruded, bool):
-            self._latched = round(extruded, 2)
-        return 0 if self._latched is None else self._latched
+        return self.coordinator.extruded_mm
 
     @property
     def available(self) -> bool:

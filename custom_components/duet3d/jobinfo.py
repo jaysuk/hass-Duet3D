@@ -39,6 +39,48 @@ def slicer_total(filament: Any) -> float | None:
     return round(sum(lengths), 1) if lengths else None
 
 
+def pick_thumbnail(thumbnails: Any, inline: bool) -> dict[str, Any] | None:
+    """The largest thumbnail of the job file that can be shown.
+
+    DSF (SBC mode) embeds the image as base64 in ``data``; a standalone board lists
+    only ``offset`` and ``size``, and the image is fetched with ``rr_thumbnail``.
+    ``inline`` says which of the two to look for.
+    """
+    usable = []
+    for thumbnail in as_list(thumbnails):
+        if not isinstance(thumbnail, dict):
+            continue
+        if inline:
+            if not isinstance(thumbnail.get("data"), str):
+                continue
+        else:
+            offset = thumbnail.get("offset")
+            if isinstance(offset, bool) or not isinstance(offset, int) or offset <= 0:
+                continue
+        usable.append(thumbnail)
+
+    def area(thumbnail: dict[str, Any]) -> float:
+        width, height = as_number(thumbnail.get("width")), as_number(thumbnail.get("height"))
+        return (width or 0) * (height or 0)
+
+    return max(usable, key=area, default=None)
+
+
+def progress_percent(extruded: Any, filament: Any) -> float:
+    """Share of the slicer's filament total already extruded, 0 to 100.
+
+    0 when there is no total (no job, or a file without filament data). The raw
+    extrusion leaves out extrusion inside macros, so it can slightly exceed the
+    slicer's total; the result is capped at 100.
+    """
+    total = slicer_total(filament)
+    if not total or total <= 0:
+        return 0
+    if isinstance(extruded, bool) or not isinstance(extruded, (int, float)):
+        return 0
+    return min(100, round(extruded / total * 100, 2))
+
+
 def build_objects(build: Any) -> list[dict[str, Any]]:
     """The objects of a job file with labelling (``M486``), as ``index``/``name``/``cancelled``."""
     objects = as_list(build.get("objects")) if isinstance(build, dict) else []

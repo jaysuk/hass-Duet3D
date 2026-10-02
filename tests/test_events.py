@@ -130,7 +130,7 @@ def test_states_that_say_nothing_about_a_job_do_not_end_or_start_one(other):
 
 
 def test_a_cancel_with_no_job_is_not_a_job():
-    """M0 with nothing printing runs stop.g, and may show ``cancelling``."""
+    """A state of ``cancelling`` with no job before it is not a job."""
     assert run(poll("idle"), poll("cancelling"), poll("idle")) == [[], [], []]
 
 

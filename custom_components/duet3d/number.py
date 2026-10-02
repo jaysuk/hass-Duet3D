@@ -111,7 +111,7 @@ class DuetTargetNumber(DuetEntity, NumberEntity):
         )
 
     async def async_set_native_value(self, value: float) -> None:
-        await send_checked(self.coordinator, _target_command(self._role, int(value)), None, "set temperature")
+        await send_checked(self.coordinator, _target_command(self._role, int(value)), None, "set temperature", wait=True)
 
 
 class DuetSpeedNumber(DuetEntity, NumberEntity):
@@ -133,7 +133,7 @@ class DuetSpeedNumber(DuetEntity, NumberEntity):
         return None if factor is None else round(factor * 100, 1)
 
     async def async_set_native_value(self, value: float) -> None:
-        await send_checked(self.coordinator, f"M220 S{int(value)}", None, "set speed")
+        await send_checked(self.coordinator, f"M220 S{int(value)}", None, "set speed", wait=True)
 
 
 class DuetFlowNumber(DuetEntity, NumberEntity):
@@ -165,4 +165,4 @@ class DuetFlowNumber(DuetEntity, NumberEntity):
         return None if factor is None else round(factor * 100, 1)
 
     async def async_set_native_value(self, value: float) -> None:
-        await send_checked(self.coordinator, f"M221 D{self._extruder} S{int(value)}", None, "set flow")
+        await send_checked(self.coordinator, f"M221 D{self._extruder} S{int(value)}", None, "set flow", wait=True)

@@ -41,7 +41,6 @@ class DuetFirmwareUpdate(DuetEntity, UpdateEntity):
 
     _attr_entity_category = EntityCategory.DIAGNOSTIC
     _attr_entity_registry_enabled_default = False
-    _attr_should_poll = True
     _attr_title = "RepRapFirmware"
 
     def __init__(self, coordinator: DuetDataUpdateCoordinator, unique_id: str) -> None:
@@ -59,8 +58,15 @@ class DuetFirmwareUpdate(DuetEntity, UpdateEntity):
         self.async_schedule_update_ha_state(True)
 
     @property
+    def should_poll(self) -> bool:
+        # CoordinatorEntity makes this a property that returns False, which overrides
+        # ``_attr_should_poll``. The latest release is read by ``async_update``.
+        return True
+
+    @property
     def installed_version(self) -> str | None:
-        return self.coordinator.firmware_version
+        version = self.coordinator.get_sensor_state("status.boards[0].firmwareVersion")
+        return version if isinstance(version, str) else self.coordinator.firmware_version
 
     @property
     def latest_version(self) -> str | None:

@@ -16,10 +16,10 @@ from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from . import DuetDataUpdateCoordinator
 from .const import DOMAIN, MACRO_DIRECTORY
 from .controls import (
-    CANCEL_STATES,
     HOME_STATES,
     PAUSE_STATES,
     RESUME_STATES,
+    cancel_job,
     fresh_status,
     send,
     send_checked,
@@ -32,7 +32,6 @@ from .model import as_list
 _FIXED = (
     ("pause", "Pause", "M25", PAUSE_STATES, True, "mdi:pause"),
     ("resume", "Resume", "M24", RESUME_STATES, True, "mdi:play"),
-    ("cancel", "Cancel", "M0", CANCEL_STATES, True, "mdi:stop"),
     ("home-all", "Home all", "G28", HOME_STATES, True, "mdi:home"),
     # Anything may be needed after an emergency stop, whatever state it left behind,
     # and the stop itself must never be refused. Both are off until asked for.
@@ -76,6 +75,9 @@ async def async_setup_entry(
             coordinator, "Acknowledge message", f"button-acknowledge-{entry_id}"
         )
 
+    def cancel():
+        yield "cancel", lambda: DuetCancelButton(coordinator, "Cancel", f"button-cancel-{entry_id}")
+
     def macros():
         for name in coordinator.macros:
             if quotable(name):
@@ -83,7 +85,7 @@ async def async_setup_entry(
                     coordinator, n, f"macro-{n}-{entry_id}"
                 )
 
-    for discover in (fixed, axes, message, macros):
+    for discover in (fixed, cancel, axes, message, macros):
         add(discover)
 
 
@@ -102,6 +104,15 @@ class DuetGcodeButton(DuetEntity, ButtonEntity):
         await send_checked(self.coordinator, self._gcode, self._allowed, self._action)
 
 
+class DuetCancelButton(DuetEntity, ButtonEntity):
+    """Cancels the job, pausing it first if it is running (see ``controls.cancel_job``)."""
+
+    _attr_icon = "mdi:stop"
+
+    async def async_press(self) -> None:
+        await cancel_job(self.coordinator)
+
+
 class DuetAcknowledgeButton(DuetEntity, ButtonEntity):
     """Closes the M291 message box, when there is one."""
 
@@ -113,7 +124,7 @@ class DuetAcknowledgeButton(DuetEntity, ButtonEntity):
             raise ServiceValidationError(
                 f"{self.coordinator.config_entry.title} has no message waiting"
             )
-        await send(self.coordinator, "M292")
+        await send(self.coordinator, "M292", wait=True)
         await self.coordinator.async_request_refresh()
 
 

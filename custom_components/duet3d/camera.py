@@ -8,6 +8,7 @@ import base64
 import aiohttp
 from . import DuetDataUpdateCoordinator
 from .entity import add_dynamic
+from .jobinfo import pick_thumbnail
 from .webcam import read_frame
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 import logging
@@ -16,9 +17,14 @@ from PIL import Image
 
 _LOGGER = logging.getLogger(__name__)
 from .const import (
+    CONF_STANDALONE,
     DOMAIN,
     SENSOR_TYPES,
 )
+
+# A thumbnail is a few kB. Anything beyond this much base64 text is not one.
+_MAX_THUMBNAIL_CHARS = 1024 * 1024
+_MAX_THUMBNAIL_CHUNKS = 1000
 
 
 async def async_setup_entry(
@@ -41,10 +47,17 @@ async def async_setup_entry(
     add_dynamic(coordinator, config_entry, async_add_entities, webcam)
 
 
+def convert_qoi_to_jpeg(qoi_data: bytes) -> bytes:
+    """Re-encode a QOI image (which browsers and most dashboards cannot show) as JPEG."""
+    image = Image.open(io.BytesIO(qoi_data)).convert("RGB")
+    with io.BytesIO() as output:
+        image.save(output, format="JPEG")
+        return output.getvalue()
+
+
 class DuetThumbnailCamera(CoordinatorEntity[DuetDataUpdateCoordinator], Camera):
     """A camera to show the Duet3D thumbnail image."""
 
-    _attr_is_streaming = True
     _attr_motion_detection_enabled = False
     _attr_supported_features = CameraEntityFeature.ON_OFF
 
@@ -61,54 +74,83 @@ class DuetThumbnailCamera(CoordinatorEntity[DuetDataUpdateCoordinator], Camera):
         self._attr_name = f"{self.device_info['name']} {camera_name}"
         self._attr_unique_id = device_id
         self.camera_name = camera_name
-        self.last_thumbnail_data = ""
-        self.last_image: bytes
+        # The last image, as converted, and the (file name, thumbnail offset) it is of.
+        self._cached_key: tuple | None = None
+        self._cached_image: bytes | None = None
 
     @property
     def device_info(self):
         """Device info."""
         return self.coordinator.device_info
 
+    def _thumbnail(self) -> dict | None:
+        """The thumbnail to show: one with inline data in SBC mode, else one to fetch."""
+        return pick_thumbnail(
+            self.coordinator.get_sensor_state(
+                SENSOR_TYPES[self.camera_name]["json_path"], self.camera_name
+            ),
+            inline=not self.coordinator.config_entry.data[CONF_STANDALONE],
+        )
+
     @property
     def available(self) -> bool:
         """Return if entity is available."""
-        job_thumbnail = self.coordinator.get_sensor_state(
-            SENSOR_TYPES[self.camera_name]["json_path"], self.camera_name
-        )
-        # Only DSF (SBC mode) embeds the image; rr_model lists thumbnails without data.
-        return (
-            isinstance(job_thumbnail, list)
-            and len(job_thumbnail) > 0
-            and isinstance(job_thumbnail[0], dict)
-            and "data" in job_thumbnail[0]
-        )
+        return self._thumbnail() is not None
 
     async def async_camera_image(
         self, width: int | None = None, height: int | None = None
     ) -> bytes | None:
         """Return a still image response from the camera."""
-        thumbnail_info_json_path = SENSOR_TYPES[self.camera_name]["json_path"]
-        thumbnail_info = self.coordinator.get_sensor_state(
-            thumbnail_info_json_path, self.camera_name
-        )
-        if self.available:
-            thumbnail_data = base64.b64decode(thumbnail_info[0]["data"])
-            if b"qoi" in thumbnail_data:
-                thumbnail_data = self.convert_qoi_to_jpeg(thumbnail_data)
+        thumbnail = self._thumbnail()
+        if thumbnail is None:
+            return None
+        file_name = self.coordinator.get_sensor_state("status.job.file.fileName") or ""
+        key = (file_name, thumbnail.get("offset"))
+        if key == self._cached_key:
+            return self._cached_image
 
-            if self.last_thumbnail_data == thumbnail_data:
-                return self.last_image
+        try:
+            if self.coordinator.config_entry.data[CONF_STANDALONE]:
+                text = await self._fetch(file_name, thumbnail["offset"])
+            else:
+                text = thumbnail["data"]
+            data = None if text is None else base64.b64decode("".join(text.split()))
+            if data is not None and data.startswith(b"qoif"):
+                data = await self.hass.async_add_executor_job(convert_qoi_to_jpeg, data)
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.debug("Could not read the thumbnail of %s: %s", file_name, exc)
+            return None
+        if data is None:
+            return None
+        self._cached_key, self._cached_image = key, data
+        return data
 
-            self.last_image = thumbnail_data
-            return self.last_image
+    async def _fetch(self, file_name: str, offset: int) -> str | None:
+        """The thumbnail as base64 text, read from the board in the chunks it serves.
 
-    def convert_qoi_to_jpeg(self, qoi_data):
-        # Load QOI image from bytes
-        qoi_image = Image.open(io.BytesIO(qoi_data)).convert("RGB")
-        # Convert QOI image to JPEG format
-        with io.BytesIO() as output:
-            qoi_image.save(output, format="JPEG")
-            return output.getvalue()
+        The chunks are joined before decoding: a chunk need not end on a multiple of
+        four characters.
+        """
+        chunks: list[str] = []
+        total = 0
+        for _ in range(_MAX_THUMBNAIL_CHUNKS):
+            response = await self.coordinator.fetch_json(
+                f"{self.coordinator.base_url}/rr_thumbnail",
+                {"name": file_name, "offset": offset},
+            )
+            if not isinstance(response, dict) or response.get("err"):
+                return None
+            data = response.get("data")
+            if not isinstance(data, str):
+                return None
+            chunks.append(data)
+            total += len(data)
+            if total > _MAX_THUMBNAIL_CHARS:
+                return None
+            offset = response.get("next") or 0
+            if not offset:
+                return "".join(chunks)
+        return None
 
 
 class DuetWebcamCamera(CoordinatorEntity[DuetDataUpdateCoordinator], Camera):

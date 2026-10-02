@@ -5,12 +5,13 @@ import logging
 import voluptuous as vol
 
 from homeassistant.core import HomeAssistant, ServiceCall
-from homeassistant.exceptions import ServiceValidationError
+from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers import entity_registry as er
 
 from .const import (
+    FILAMENT_DIRECTORY,
     ATTR_AXES,
     ATTR_CANCEL,
     ATTR_FILAMENT,
@@ -31,16 +32,17 @@ from .const import (
     SERVICE_UNLOAD_FILAMENT,
 )
 from .controls import (
-    CANCEL_STATES,
     HOME_STATES,
     IDLE_STATES,
     PAUSE_STATES,
     PRINTING,
     RESUME_STATES,
+    cancel_job,
     fresh_status,
     require,
     send,
 )
+from .extruders import tool_filament
 from .hardware import message_box
 from .jobinfo import build_objects
 
@@ -64,7 +66,8 @@ _TARGET = {
     vol.Optional("device_id"): vol.All(cv.ensure_list, [cv.string]),
     vol.Optional("entity_id"): cv.entity_ids,
 }
-_FILAMENT_NAME = vol.All(cv.string, vol.Match(r'^[^"\r\n;]+$'))
+# RRF refuses a comma in a filament name as well (GCodes.cpp, LoadFilament).
+_FILAMENT_NAME = vol.All(cv.string, vol.Match(r'^[^"\r\n;,]+$'))
 _TOOL = vol.All(vol.Coerce(int), vol.Range(min=0))
 _AXIS_LETTER = vol.All(cv.string, vol.Upper, vol.Match(r"^[A-Z]$"))
 
@@ -129,6 +132,10 @@ def async_register_services(hass: HomeAssistant) -> None:
 
         return handler
 
+    async def cancel(call: ServiceCall):
+        for coordinator in _coordinators(hass, call):
+            await cancel_job(coordinator)
+
     async def acknowledge_message(call: ServiceCall):
         # M292 closes the message box; P1 is the box's Cancel button.
         gcode = "M292 P1" if call.data.get(ATTR_CANCEL) else "M292"
@@ -138,24 +145,32 @@ def async_register_services(hass: HomeAssistant) -> None:
                 raise ServiceValidationError(
                     f"{coordinator.config_entry.title} has no message waiting"
                 )
-            await send(coordinator, gcode)
+            await send(coordinator, gcode, wait=True)
 
-    async def selected_tool_gcode(call: ServiceCall, gcode: str, action: str):
-        """M701/M702 act on the selected tool and have no tool parameter, so the tool
-        asked for must already be the selected one. Selecting it here would run the
-        tool change macros, which is a decision for the caller."""
+    async def selected_tool_filament(coordinator, call: ServiceCall, action: str) -> str:
+        """Check that M701/M702 can run, and return the filament now in the tool.
+
+        They act on the selected tool and have no tool parameter, so the tool asked
+        for must already be the selected one. Selecting it here would run the tool
+        change macros, which is a decision for the caller.
+        """
         tool = call.data[ATTR_TOOL]
-        for coordinator in _coordinators(hass, call):
-            await require(coordinator, IDLE_STATES, action)
-            selected = coordinator.get_sensor_state("status.state.currentTool")
-            if selected != tool:
-                now = "none is" if selected in (None, -1) else f"tool {selected} is"
-                raise ServiceValidationError(
-                    f"Cannot {action}: tool {tool} is not selected ({now}). "
-                    f"Select it first, for example with send_code T{tool}"
-                )
-            await send(coordinator, gcode)
-            await coordinator.async_request_refresh()
+        await require(coordinator, IDLE_STATES, action)
+        selected = coordinator.get_sensor_state("status.state.currentTool")
+        if selected != tool:
+            now = "none is" if selected in (None, -1) else f"tool {selected} is"
+            raise ServiceValidationError(
+                f"Cannot {action}: tool {tool} is not selected ({now}). "
+                f"Select it first, for example with send_code T{tool}"
+            )
+        loaded = tool_filament(
+            coordinator.get_sensor_state("status.move.extruders"),
+            coordinator.get_sensor_state("status.tools"),
+            tool,
+        )
+        if loaded is None:
+            raise ServiceValidationError(f"Cannot {action}: tool {tool} has no extruder")
+        return loaded
 
     async def cancel_object(call: ServiceCall):
         index = call.data[ATTR_OBJECT]
@@ -167,21 +182,47 @@ def async_register_services(hass: HomeAssistant) -> None:
                 raise ServiceValidationError(
                     f"{coordinator.config_entry.title} has no object {index} (objects: {known})"
                 )
-            await send(coordinator, f"M486 P{index}")
+            await send(coordinator, f"M486 P{index}", wait=True)
             await coordinator.async_request_refresh()
 
     async def load_filament(call: ServiceCall):
-        await selected_tool_gcode(call, f'M701 S"{call.data[ATTR_FILAMENT]}"', "load filament")
+        # Firmware refusals cannot be read back (see CLAUDE.md), so what M701 would
+        # refuse is checked here, before it is sent.
+        name = call.data[ATTR_FILAMENT]
+        for coordinator in _coordinators(hass, call):
+            loaded = await selected_tool_filament(coordinator, call, "load filament")
+            if loaded.lower() == name.lower():
+                raise ServiceValidationError(f"{loaded} is already loaded")
+            if loaded:
+                raise ServiceValidationError(f"Unload {loaded} first")
+            try:
+                known = await coordinator.list_directory(FILAMENT_DIRECTORY, "d")
+            except Exception as error:
+                raise HomeAssistantError(
+                    f"Could not list {FILAMENT_DIRECTORY} on {coordinator.config_entry.title}: {error}"
+                ) from error
+            if name not in known:
+                have = ", ".join(known) or "none"
+                raise ServiceValidationError(
+                    f"{coordinator.config_entry.title} has no filament {name} in "
+                    f"{FILAMENT_DIRECTORY} (filaments: {have})"
+                )
+            await send(coordinator, f'M701 S"{name}"')
+            await coordinator.async_request_refresh()
 
     async def unload_filament(call: ServiceCall):
-        await selected_tool_gcode(call, "M702", "unload filament")
+        for coordinator in _coordinators(hass, call):
+            if not await selected_tool_filament(coordinator, call, "unload filament"):
+                raise ServiceValidationError("No filament is loaded")
+            await send(coordinator, "M702")
+            await coordinator.async_request_refresh()
 
     handlers = {
         SERVICE_SEND_GCODE: (send_code, {vol.Required(ATTR_GCODE): cv.string}),
         SERVICE_HOME: (home, {vol.Optional(ATTR_AXES): vol.All(cv.ensure_list, [_AXIS_LETTER])}),
         SERVICE_PAUSE: (simple("M25", PAUSE_STATES, "pause"), {}),
         SERVICE_RESUME: (simple("M24", RESUME_STATES, "resume"), {}),
-        SERVICE_CANCEL: (simple("M0", CANCEL_STATES, "cancel"), {}),
+        SERVICE_CANCEL: (cancel, {}),
         SERVICE_ACKNOWLEDGE_MESSAGE: (acknowledge_message, {vol.Optional(ATTR_CANCEL): cv.boolean}),
         # Never refused: stopping must work in any state. The board then needs a reset.
         SERVICE_EMERGENCY_STOP: (simple("M112", None, "emergency stop"), {}),

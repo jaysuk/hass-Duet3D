@@ -26,6 +26,8 @@ JOB_RESUMED = "job_resumed"
 JOB_FINISHED = "job_finished"
 JOB_CANCELLED = "job_cancelled"
 JOB_FAILED = "job_failed"
+# The events that end a job.
+JOB_END_TYPES = (JOB_FINISHED, JOB_CANCELLED, JOB_FAILED)
 MESSAGE_BOX_OPENED = "message_box_opened"
 PRINTER_HALTED = "printer_halted"
 
@@ -58,6 +60,23 @@ def _number(value: Any) -> float | None:
 
 def _text(value: Any) -> str:
     return value if isinstance(value, str) else ""
+
+
+def extruded_reading(previous: float, raw: Any, in_job: bool, ended_now: bool) -> float:
+    """What Filament Extruded shows after this poll, in mm.
+
+    In a real job (adopted ones included) it follows job.rawExtrusion, holding the last
+    number when a poll has none. On the poll whose events end the job it keeps the final
+    value, so the print-end automation reads the whole job. After that, and during a
+    simulation or with no job, it is 0. The drop to 0 is ignored by a utility_meter, and
+    the next job then counts from 0, so nothing at its start is lost.
+    """
+    if ended_now:
+        return previous
+    if not in_job:
+        return 0.0
+    number = _number(raw)
+    return previous if number is None else round(number, 2)
 
 
 class JobTracker:

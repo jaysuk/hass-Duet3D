@@ -43,6 +43,7 @@ def test_fans_skip_null_slots_and_name_unnamed_ones():
     assert list(fans) == ["fan-0", "fan-2"]
     assert fans["fan-0"] == {
         "index": 0, "label": "Part Cooling Fan", "speed": 50.0, "requested": 60.0, "rpm": None,
+        "thermostatic": False,
     }
     assert fans["fan-2"]["label"] == "Fan 2"  # keyed by index, so renaming a fan keeps its entity
     assert fans["fan-2"]["rpm"] == 3000

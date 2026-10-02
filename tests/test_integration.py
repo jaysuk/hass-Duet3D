@@ -59,8 +59,10 @@ async def test_selected_tool_marks_only_its_extruder_active(hass, fake_duet):
 
 
 async def test_filament_extruded_and_current_tool_sensors(hass, fake_duet):
+    # a job already running when Home Assistant starts is followed from its first reading
     fake_duet.model["job"]["rawExtrusion"] = 1234.567
     fake_duet.model["state"]["currentTool"] = 0
+    fake_duet.model["state"]["status"] = "processing"
     entry = await _setup(hass, fake_duet)
     registry = er.async_get(hass)
     extruded = hass.states.get(
@@ -230,7 +232,7 @@ async def test_real_3_7_0_rc2_model_end_to_end(hass, fake_duet):
     assert float(_state(hass, entry, "chamber-current").state) == heaters[2]["current"]
     assert _state(hass, entry, "extruder-0").state == "unknown"
     assert _state(hass, entry, "Current Tool").state == "0"
-    assert _state(hass, entry, "Filament Extruded").state == "0"
+    assert float(_state(hass, entry, "Filament Extruded").state) == 0
     # nothing leftover from the old numbering
     assert not _by_unique_id_prefix(hass, "1-")
     assert not _by_unique_id_prefix(hass, "2-")

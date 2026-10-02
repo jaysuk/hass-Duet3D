@@ -48,6 +48,19 @@ def active_extruders(tools: Any, current_tool: Any) -> set[int]:
     return active
 
 
+def tool_filament(extruders: Any, tools: Any, tool: Any) -> str | None:
+    """The filament loaded in the first extruder of ``tool``: ``""`` if none, ``None`` if the
+    tool drives no extruder. This is the extruder ``M701``/``M702`` act on."""
+    driven = sorted(active_extruders(tools, tool))
+    if not driven:
+        return None
+    items = _as_list(extruders)
+    if driven[0] >= len(items) or not isinstance(items[driven[0]], dict):
+        return ""
+    filament = items[driven[0]].get("filament")
+    return filament if isinstance(filament, str) else ""
+
+
 def build_extruders(extruders: Any, tools: Any, current_tool: Any) -> list[dict[str, Any]]:
     """Describe every extruder in a form ready to expose as entity attributes.
 

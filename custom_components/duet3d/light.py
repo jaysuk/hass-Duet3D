@@ -1,33 +1,22 @@
 import logging
-import colorsys
-
-import voluptuous as vol
 
 from homeassistant.components.light import (
     ATTR_BRIGHTNESS,
-    ATTR_HS_COLOR,
+    ATTR_RGB_COLOR,
     ColorMode,
     LightEntity,
-    PLATFORM_SCHEMA,
 )
-import homeassistant.helpers.config_validation as cv
 from homeassistant.core import HomeAssistant
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
 from homeassistant.helpers.update_coordinator import CoordinatorEntity
 from homeassistant.config_entries import ConfigEntry
 
 from . import DuetDataUpdateCoordinator
+from .controls import send
 
 from .const import CONF_NAME, DOMAIN, CONF_LIGHT, CONF_LED_STRIP_INDEX, CONF_LED_COUNT
 
 _LOGGER = logging.getLogger(__name__)
-
-# Define the validation schema for the platform configuration
-PLATFORM_SCHEMA = PLATFORM_SCHEMA.extend(
-    {
-        vol.Required("name"): cv.string,
-    }
-)
 
 
 async def async_setup_entry(
@@ -114,54 +103,39 @@ class Duet3DLight(Duet3DLightBase):
         """Return the RGB color of the light."""
         return self._rgb_color
 
-    def _hs_to_rgb(self, hs_color):
-        rgb_color = colorsys.hsv_to_rgb(hs_color[0] / 360, hs_color[1] / 100, 1)
-        return tuple(int(round(x * 255)) for x in rgb_color)
-
     async def async_turn_on(self, **kwargs):
-        self._state = True
+        # The state changes only once the board has accepted the command.
+        brightness = kwargs.get(ATTR_BRIGHTNESS, self._last_brightness)
+        rgb_color = tuple(kwargs.get(ATTR_RGB_COLOR, self._rgb_color))
 
-        if ATTR_BRIGHTNESS in kwargs:
-            self._brightness = kwargs[ATTR_BRIGHTNESS]
-            self._last_brightness = self._brightness
-
-        if ATTR_HS_COLOR in kwargs:
-            self._rgb_color = self._hs_to_rgb(kwargs[ATTR_HS_COLOR])
-
-        if ATTR_BRIGHTNESS not in kwargs:
-            self._brightness = self._last_brightness
-
-        # Build the M150 GCode command (RRF 3.5+ compatible with E param)
-        command = "M150 E{strip} R{r} U{g} B{b} P{p} S{s}".format(
-            strip=self._strip_index,
-            r=self._rgb_color[0],
-            g=self._rgb_color[1],
-            b=self._rgb_color[2],
-            p=self._brightness,
-            s=self._led_count,
+        # M150 (RRF 3.5+, with the E parameter)
+        await send(
+            self.coordinator,
+            "M150 E{strip} R{r} U{g} B{b} P{p} S{s}".format(
+                strip=self._strip_index,
+                r=rgb_color[0],
+                g=rgb_color[1],
+                b=rgb_color[2],
+                p=brightness,
+                s=self._led_count,
+            ),
+            wait=True,
         )
-
-        try:
-            await self.coordinator.send_gcode(command)
-        except Exception as e:
-            _LOGGER.error("Error sending LED command: %s", e)
-
-        self.async_schedule_update_ha_state()
+        self._state = True
+        self._brightness = self._last_brightness = brightness
+        self._rgb_color = rgb_color
+        self.async_write_ha_state()
 
     async def async_turn_off(self, **kwargs):
         """Turn the light off."""
-        self._state = False
-        self._last_brightness = self._brightness
-        self._brightness = 0
-
-        command = "M150 E{strip} R0 U0 B0 P0 S{s}".format(
-            strip=self._strip_index,
-            s=self._led_count,
+        await send(
+            self.coordinator,
+            "M150 E{strip} R0 U0 B0 P0 S{s}".format(
+                strip=self._strip_index, s=self._led_count
+            ),
+            wait=True,
         )
-
-        try:
-            await self.coordinator.send_gcode(command)
-        except Exception as e:
-            _LOGGER.error("Error sending LED command: %s", e)
-
-        self.async_schedule_update_ha_state()
+        self._state = False
+        self._last_brightness = self._brightness or self._last_brightness
+        self._brightness = 0
+        self.async_write_ha_state()
