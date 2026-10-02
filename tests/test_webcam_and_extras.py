@@ -149,7 +149,7 @@ async def test_the_options_form_offers_the_webcam_address(hass, fake_duet):
         assert "webcam_url" in {str(k) for k in flow["data_schema"].schema}
         await hass.config_entries.options.async_configure(
             flow["flow_id"],
-            {"update_interval": 30, "printing_interval": 5, "webcam_url": "  http://cam/s  ", "light": False},
+            {"update_interval": 30, "printing_interval": 5, "webcam_url": "  http://cam/s  "},
         )
     assert entry.data["webcam_url"] == "http://cam/s"
 

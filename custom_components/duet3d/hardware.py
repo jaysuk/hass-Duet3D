@@ -142,6 +142,29 @@ def build_filament_monitors(monitors: Any) -> dict[str, dict[str, Any]]:
     return result
 
 
+def build_led_strips(strips: Any) -> dict[str, dict[str, Any]]:
+    """LED strips by index (``M950 E``). Unconfigured slots are ``null`` and skipped.
+
+    ``count`` is the strip's ``maxLeds``, the ``U`` value of its ``M950``: how many
+    LEDs the firmware drives. ``None`` if the board does not say. ``rgbw`` is true for
+    ``NeoPixel_RGBW`` strips, the only type with a white channel (``M150 W``).
+    """
+    result: dict[str, dict[str, Any]] = {}
+    for index, strip in enumerate(as_list(strips)):
+        if not isinstance(strip, dict):
+            continue
+        count = as_number(strip.get("maxLeds"))
+        kind = _text(strip.get("type"))
+        result[f"led-{index}"] = {
+            "index": index,
+            "label": "LED" if index == 0 else f"LED {index}",
+            "count": int(count) if count is not None and count >= 1 else None,
+            "type": kind,
+            "rgbw": kind is not None and kind.lower() == "neopixel_rgbw",
+        }
+    return result
+
+
 def axes_homed(axes: Any) -> dict[str, Any] | None:
     """Whether every visible axis is homed, or ``None`` if there are no axes."""
     homed: dict[str, bool] = {}
@@ -188,6 +211,7 @@ def build_hardware(status: Any) -> dict[str, dict[str, dict[str, Any]]]:
         "boards": build_boards(status.get("boards")),
         "volumes": build_volumes(status.get("volumes")),
         "interfaces": build_interfaces(status.get("network")),
+        "led_strips": build_led_strips(status.get("ledStrips")),
         "monitors": build_filament_monitors(
             sensors.get("filamentMonitors") if isinstance(sensors, dict) else None
         ),

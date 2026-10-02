@@ -17,9 +17,6 @@ from .const import (
     CONF_SBC_GCODE_PATH,
     CONF_SBC_STATUS_PATH,
     CONF_BASE_URL,
-    CONF_LIGHT,
-    CONF_LED_STRIP_INDEX,
-    CONF_LED_COUNT,
     CONF_INTERVAL,
     CONF_PRINTING_INTERVAL,
     CONF_STANDALONE,
@@ -44,8 +41,8 @@ def _schema_with_defaults(
     password="",
     update_interval=30,
 ):
-    # Standalone or SBC mode is detected from the board, and the LED strip is set up in
-    # the options once there is one. Do not wrap fields in a nested vol.Schema: HA
+    # Standalone or SBC mode is detected from the board, and LED strips come from its
+    # object model. Do not wrap fields in a nested vol.Schema: HA
     # cannot serialise it and the form then fails to load with a 500.
     return vol.Schema(
         {
@@ -108,9 +105,6 @@ class Duet3dConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                         CONF_PASSWORD: user_input.get(CONF_PASSWORD, ""),
                         CONF_SSL: user_input[CONF_SSL],
                         CONF_INTERVAL: user_input[CONF_INTERVAL],
-                        CONF_LIGHT: user_input.get(CONF_LIGHT, False),
-                        CONF_LED_STRIP_INDEX: user_input.get(CONF_LED_STRIP_INDEX, 0),
-                        CONF_LED_COUNT: user_input.get(CONF_LED_COUNT, 1),
                         CONF_STANDALONE: standalone,
                         CONF_BASE_URL: connection_url,
                         CONF_SBC_STATUS_PATH: CONF_SBC_STATUS_PATH,
@@ -211,7 +205,6 @@ class Duet3dOptionsFlow(config_entries.OptionsFlow):
     """Options flow for Duet3D Printer integration.
 
     ``self.config_entry`` is provided by Home Assistant; assigning it is an error.
-    The LED strip questions are only asked when the printer has an LED strip.
     """
 
     title: str | None = None
@@ -241,10 +234,7 @@ class Duet3dOptionsFlow(config_entries.OptionsFlow):
                 CONF_INTERVAL: user_input[CONF_INTERVAL],
                 CONF_PRINTING_INTERVAL: user_input[CONF_PRINTING_INTERVAL],
                 CONF_WEBCAM_URL: user_input.get(CONF_WEBCAM_URL, "").strip(),
-                CONF_LIGHT: user_input[CONF_LIGHT],
             }
-            if user_input[CONF_LIGHT]:
-                return await self.async_step_led()
             return self.finish_flow()
         options_schema = vol.Schema(
             {
@@ -265,35 +255,6 @@ class Duet3dOptionsFlow(config_entries.OptionsFlow):
                     CONF_WEBCAM_URL,
                     description={"suggested_value": config_data.get(CONF_WEBCAM_URL, "")},
                 ): str,
-                vol.Optional(
-                    CONF_LIGHT,
-                    default=config_data.get(CONF_LIGHT, False),
-                ): bool,
             }
         )
         return self.async_show_form(step_id="init", data_schema=options_schema)
-
-    async def async_step_led(
-        self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
-        """Which LED strip, asked only after "LED's installed" is ticked."""
-        if user_input is not None:
-            self.new_entry_data[CONF_LED_STRIP_INDEX] = user_input[CONF_LED_STRIP_INDEX]
-            self.new_entry_data[CONF_LED_COUNT] = user_input[CONF_LED_COUNT]
-            return self.finish_flow()
-        config_data = self.config_entry.data
-        return self.async_show_form(
-            step_id="led",
-            data_schema=vol.Schema(
-                {
-                    vol.Optional(
-                        CONF_LED_STRIP_INDEX,
-                        default=config_data.get(CONF_LED_STRIP_INDEX, 0),
-                    ): int,
-                    vol.Optional(
-                        CONF_LED_COUNT,
-                        default=config_data.get(CONF_LED_COUNT, 1),
-                    ): int,
-                }
-            ),
-        )

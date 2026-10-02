@@ -16,6 +16,7 @@ from custom_components.duet3d.hardware import (
     build_boards,
     build_fans,
     build_filament_monitors,
+    build_led_strips,
     build_hardware,
     build_interfaces,
     build_volumes,
@@ -146,14 +147,15 @@ def test_set_path_rebuilds_nesting_for_dotted_keys():
 
 @pytest.mark.parametrize("junk", JUNK)
 def test_malformed_input_never_raises(junk):
-    for build in (build_fans, build_boards, build_volumes, build_interfaces, build_filament_monitors):
+    for build in (build_fans, build_boards, build_volumes, build_interfaces, build_filament_monitors,
+                  build_led_strips):
         build(junk)
     axes_homed(junk)
     message_box(junk)
     startup_error(junk)
     build_hardware(junk)
     assert build_hardware(junk) == {
-        "fans": {}, "boards": {}, "volumes": {}, "interfaces": {}, "monitors": {},
+        "fans": {}, "boards": {}, "volumes": {}, "interfaces": {}, "led_strips": {}, "monitors": {},
     }
 
 

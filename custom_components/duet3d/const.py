@@ -7,7 +7,6 @@ DOMAIN = "duet3d"
 
 DEFAULT_NAME = "Duet3D"
 CONF_NAME = "name"
-CONF_LIGHT = "light"
 CONF_STANDALONE = "standalone"
 ATTR_GCODE = "gcode"
 CONF_SBC_API = "/machine"
@@ -42,8 +41,6 @@ CONF_WEBCAM_URL = "webcam_url"
 DEFAULT_PRINTING_INTERVAL = 5
 # Event fired on the Home Assistant bus for job lifecycle changes (see events.py).
 EVENT_NAME = "duet3d_event"
-CONF_LED_STRIP_INDEX = "led_strip_index"
-CONF_LED_COUNT = "led_count"
 
 # Standalone mode polls these top-level object model keys, each as one request
 # (key=<name>&flags=d99vn: d99 = full depth, v = verbose fields, n = include nulls).
@@ -61,7 +58,7 @@ STANDALONE_POLL_KEYS = (
 )
 # Things that rarely change (and cost a request each) are refreshed this often
 # instead of on every poll. SBC mode gets everything in its one request anyway.
-STANDALONE_SLOW_POLL_KEYS = ("boards", "network", "volumes")
+STANDALONE_SLOW_POLL_KEYS = ("boards", "network", "volumes", "ledStrips")
 STANDALONE_SLOW_POLL_SECONDS = 60
 STANDALONE_POLL_FLAGS = "d99vn"
 MACRO_DIRECTORY = "0:/macros"

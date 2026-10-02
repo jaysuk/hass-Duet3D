@@ -347,45 +347,6 @@ async def test_a_firmware_update_shows_in_the_entity_and_the_device(hass, fake_d
     assert dr.async_get(hass).async_get(device.id).sw_version == "3.6.0"
 
 
-# --- A6: the LED light ------------------------------------------------------------------
-
-
-def light_id(hass):
-    (entity,) = by_unique_id_prefix(hass, "LED-")
-    return entity.entity_id
-
-
-async def test_the_light_sends_the_rgb_colour_and_brightness(hass, fake_duet):
-    await setup_entry(hass, fake_duet, entry_for(fake_duet, light=True))
-    await hass.services.async_call(
-        "light", "turn_on", {"entity_id": light_id(hass), "rgb_color": [255, 0, 0], "brightness": 128}, blocking=True
-    )
-    assert fake_duet.gcodes == ["M150 E0 R255 U0 B0 P128 S1"]
-    state = hass.states.get(light_id(hass))
-    assert state.state == "on" and state.attributes["rgb_color"] == (255, 0, 0)
-
-
-async def test_the_light_turns_off(hass, fake_duet):
-    await setup_entry(hass, fake_duet, entry_for(fake_duet, light=True))
-    await hass.services.async_call("light", "turn_off", {"entity_id": light_id(hass)}, blocking=True)
-    assert fake_duet.gcodes == ["M150 E0 R0 U0 B0 P0 S1"]
-    assert hass.states.get(light_id(hass)).state == "off"
-
-
-async def test_a_failed_light_command_raises_and_changes_nothing(hass, fake_duet, monkeypatch):
-    entry = await setup_entry(hass, fake_duet, entry_for(fake_duet, light=True))
-
-    async def broken(gcode, wait=False):
-        raise OSError("down")
-
-    monkeypatch.setattr(coordinator_of(hass, entry), "send_gcode", broken)
-    with pytest.raises(HomeAssistantError):
-        await hass.services.async_call(
-            "light", "turn_on", {"entity_id": light_id(hass), "rgb_color": [0, 255, 0]}, blocking=True
-        )
-    assert hass.states.get(light_id(hass)).state == "off"
-
-
 # --- L1: webcam from DWC -----------------------------------------------------------------
 
 

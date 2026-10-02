@@ -89,7 +89,7 @@ async def test_a_poll_is_one_full_depth_request_per_top_level_key(hass, fake_due
         # not all of ``sensors``: only filament monitors need to be prompt
         ("sensors.filamentMonitors", "d99vn"),
     ]
-    slow = [("boards", "d99vn"), ("network", "d99vn"), ("volumes", "d99vn")]
+    slow = [("boards", "d99vn"), ("network", "d99vn"), ("volumes", "d99vn"), ("ledStrips", "d99vn")]
 
     entry = await _setup(hass, fake_duet)
     assert fake_duet.requests == fast + slow  # first poll gets everything

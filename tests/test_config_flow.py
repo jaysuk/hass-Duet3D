@@ -69,8 +69,8 @@ async def test_options_form_is_served_over_http(hass, hass_client):
     # the entry above still carries the retired number_of_tools/bed keys
     fields = {field["name"] for field in result["data_schema"]}
     assert not {"number_of_tools", "bed", "standalone"} & fields
-    # the LED strip is only asked about once there is one
-    assert fields == {"update_interval", "printing_interval", "webcam_url", "light"}
+    # LED strips come from the object model, so there is nothing to ask about them
+    assert fields == {"update_interval", "printing_interval", "webcam_url"}
 
 
 async def test_saving_options_keeps_working_for_an_entry_with_retired_keys(hass):
@@ -96,7 +96,7 @@ async def test_saving_options_keeps_working_for_an_entry_with_retired_keys(hass)
         flow = await hass.config_entries.options.async_init(entry.entry_id)
         result = await hass.config_entries.options.async_configure(
             flow["flow_id"],
-            {"update_interval": 20, "light": False},
+            {"update_interval": 20},
         )
         await hass.async_block_till_done()
     assert result["type"] == "create_entry", result
@@ -123,12 +123,12 @@ async def test_printing_interval_defaults_to_5_and_round_trips_through_the_optio
         }
         assert defaults["printing_interval"] == 5
         # left alone, the default is saved
-        await hass.config_entries.options.async_configure(flow["flow_id"], {"update_interval": 30, "light": False})
+        await hass.config_entries.options.async_configure(flow["flow_id"], {"update_interval": 30})
         assert entry.data["printing_interval"] == 5
 
         flow = await hass.config_entries.options.async_init(entry.entry_id)
         await hass.config_entries.options.async_configure(
-            flow["flow_id"], {"update_interval": 30, "printing_interval": 2, "light": False}
+            flow["flow_id"], {"update_interval": 30, "printing_interval": 2}
         )
         await hass.async_block_till_done()
     assert entry.data["printing_interval"] == 2
@@ -152,34 +152,8 @@ async def test_printing_interval_must_be_at_least_one_second(hass):
     flow = await hass.config_entries.options.async_init(entry.entry_id)
     with pytest.raises(InvalidData):
         await hass.config_entries.options.async_configure(
-            flow["flow_id"], {"update_interval": 30, "printing_interval": 0, "light": False}
+            flow["flow_id"], {"update_interval": 30, "printing_interval": 0}
         )
-
-
-async def test_ticking_leds_in_the_options_asks_which_strip(hass):
-    from unittest.mock import patch
-
-    entry = MockConfigEntry(
-        domain=DOMAIN,
-        data={
-            "name": "duet", "host": "192.168.69.1", "port": 80, "password": "", "ssl": False,
-            "update_interval": 10, "light": False, "led_strip_index": 0, "led_count": 1,
-            "standalone": True,
-        },
-    )
-    entry.add_to_hass(hass)
-    with patch("custom_components.duet3d.async_setup_entry", return_value=True):
-        flow = await hass.config_entries.options.async_init(entry.entry_id)
-        asked = await hass.config_entries.options.async_configure(
-            flow["flow_id"], {"update_interval": 10, "light": True}
-        )
-        assert asked["type"] == "form" and asked["step_id"] == "led"
-        done = await hass.config_entries.options.async_configure(
-            flow["flow_id"], {"led_strip_index": 1, "led_count": 24}
-        )
-        await hass.async_block_till_done()
-    assert done["type"] == "create_entry", done
-    assert (entry.data["light"], entry.data["led_strip_index"], entry.data["led_count"]) == (True, 1, 24)
 
 
 async def _submit(hass, server, **extra):
@@ -211,8 +185,6 @@ async def test_submitting_the_form_for_a_standalone_board_detects_standalone(has
     assert result["data"]["host"] == fake_duet.host
     assert result["data"]["update_interval"] == 10
     assert result["data"]["standalone"] is True
-    # no LED strip was asked about, so none is set up
-    assert result["data"]["light"] is False
 
 
 async def test_submitting_the_form_for_an_sbc_board_detects_sbc(hass):

@@ -3,7 +3,7 @@
     "flow_title": "Duet3D Printer: {host}",
     "step": {
       "user": {
-        "description": "Standalone or SBC mode is detected automatically. An LED strip can be added afterwards in the options.",
+        "description": "Standalone or SBC mode is detected automatically.",
         "data": {
           "host": "Host",
           "port": "Port",
@@ -51,16 +51,8 @@
         "title": "Duet3D Options",
         "data": {
           "update_interval": "Update interval (seconds)",
-          "light": "LED's installed",
           "printing_interval": "Update interval while printing (seconds)",
           "webcam_url": "Webcam address (leave empty to use the one in Duet Web Control)"
-        }
-      },
-      "led": {
-        "title": "LED strip",
-        "data": {
-          "led_strip_index": "LED strip index (default 0)",
-          "led_count": "Number of LEDs"
         }
       }
     }

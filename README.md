@@ -39,8 +39,8 @@ Whether the board is [standalone or in SBC mode](https://docs.duet3d.com/en/User
 is detected from what it answers, and a wrong password is reported. If you change a board
 between the two modes, remove the integration and add it again.
 
-If your printer has an LED strip, open the integration's **Configure** and tick
-"LED's installed"; it then asks for the strip index and the number of LEDs.
+LED strips need no setup: each strip the board has configured (`M950 E`) gets a light, and
+its length is the strip's `U` value.
 
 **Configure** also has the update interval while printing (see
 [How often it polls](#how-often-it-polls)) and the webcam address (see [Webcam](#webcam)).
@@ -144,6 +144,7 @@ poll; nothing is shown optimistically.
 | `Extruder N flow` number | `M221 D.. S..` (10-300 %) | any state |
 | `<Fan name> control` fan | `M106 P.. S..` | any state. The percentage shown is what was asked for. A thermostatic fan has no control: the firmware ignores `M106 S` for it and drives it from temperature (its `speed` sensor stays) |
 | `Macro <name>` buttons (**disabled by default**) | `M98 P"0:/macros/<file>"` | idle |
+| `LED`, `LED N` lights | `M150 E<strip> R.. U.. B.. [W..] P.. S<length>` | any state. One per configured strip (`M950 E`), set over the whole strip (`S` is the strip's `U` length). An RGBW strip (the object model's `type` is `NeoPixel_RGBW`) is an RGBW light with a white level (`W`), and turns on to its white LED The board does not report a strip's colour, so the light shows what Home Assistant last sent |
 
 The speed, flow and target numbers sit alongside the read-only sensors of the same name
 (a different entity type), so no existing entity changed. A second heater of the same tool,
