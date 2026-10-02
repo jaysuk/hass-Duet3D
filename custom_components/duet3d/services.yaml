@@ -73,3 +73,92 @@ acknowledge_message:
       default: false
       selector:
         boolean: {}
+
+emergency_stop:
+  name: Emergency stop
+  description: >-
+    Send M112, which halts the printer at once, heaters off, in any state. The
+    board then has to be reset with "Reset after emergency stop".
+  target:
+    device:
+      integration: duet3d
+
+reset_after_emergency_stop:
+  name: Reset after emergency stop
+  description: >-
+    Send M999 to restart the board after an emergency stop. Refused unless the
+    printer is halted.
+  target:
+    device:
+      integration: duet3d
+
+load_filament:
+  name: Load filament
+  description: >-
+    Run M701 for the selected tool, which assigns the named filament to it and runs
+    its load.g (this moves filament). The tool must already be selected, because
+    M701 has no tool parameter and selecting it would run a tool change. Refused
+    unless the printer is idle.
+  target:
+    device:
+      integration: duet3d
+  fields:
+    tool:
+      name: Tool
+      description: Number of the tool, which must be the selected one.
+      required: true
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 99
+          mode: box
+    filament:
+      name: Filament
+      description: Name of a filament in /sys/filaments (for example PLA).
+      required: true
+      example: "PLA"
+      selector:
+        text: {}
+
+unload_filament:
+  name: Unload filament
+  description: >-
+    Run M702 for the selected tool, which runs its unload.g (this moves filament)
+    and clears the filament name. The tool must already be selected. Refused unless
+    the printer is idle.
+  target:
+    device:
+      integration: duet3d
+  fields:
+    tool:
+      name: Tool
+      description: Number of the tool, which must be the selected one.
+      required: true
+      example: 0
+      selector:
+        number:
+          min: 0
+          max: 99
+          mode: box
+
+cancel_object:
+  name: Cancel object
+  description: >-
+    Cancel one object of the running job with M486, so the rest of the plate keeps
+    printing. The job file must label its objects; see the "Print objects" sensor
+    for their numbers. Refused unless a job is running.
+  target:
+    device:
+      integration: duet3d
+  fields:
+    object:
+      name: Object
+      description: Number of the object, as listed by the "Print objects" sensor.
+      required: true
+      example: 1
+      selector:
+        number:
+          min: 0
+          max: 999
+          mode: box

@@ -12,6 +12,22 @@
           "update_interval": "Update interval (seconds)",
           "ssl": "Use SSL?"
         }
+      },
+      "reauth_confirm": {
+        "title": "Password for {name}",
+        "description": "The board rejected the saved password. Enter the current one.",
+        "data": {
+          "password": "Password"
+        }
+      },
+      "reconfigure": {
+        "title": "Printer address",
+        "data": {
+          "host": "Host",
+          "port": "Port",
+          "ssl": "Use SSL?",
+          "password": "Password (leave empty if none)"
+        }
       }
     },
     "error": {
@@ -24,7 +40,9 @@
       "already_configured": "Device already configured",
       "unknown": "Unknown error occurred",
       "cannot_connect": "Could not connect to host",
-      "auth_successful": "Successfully connected to Duet3D"
+      "auth_successful": "Successfully connected to Duet3D",
+      "reauth_successful": "The password was updated",
+      "reconfigure_successful": "The printer's address was updated"
     }
   },
   "options": {
@@ -33,7 +51,9 @@
         "title": "Duet3D Options",
         "data": {
           "update_interval": "Update interval (seconds)",
-          "light": "LED's installed"
+          "light": "LED's installed",
+          "printing_interval": "Update interval while printing (seconds)",
+          "webcam_url": "Webcam address (leave empty to use the one in Duet Web Control)"
         }
       },
       "led": {
@@ -43,6 +63,18 @@
           "led_count": "Number of LEDs"
         }
       }
+    }
+  },
+  "device_automation": {
+    "trigger_type": {
+      "job_started": "Job started",
+      "job_paused": "Job paused",
+      "job_resumed": "Job resumed",
+      "job_finished": "Job finished",
+      "job_cancelled": "Job cancelled",
+      "job_failed": "Job failed",
+      "message_box_opened": "Message box opened",
+      "printer_halted": "Printer halted"
     }
   }
 }

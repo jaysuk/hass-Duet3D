@@ -42,6 +42,13 @@ between the two modes, remove the integration and add it again.
 If your printer has an LED strip, open the integration's **Configure** and tick
 "LED's installed"; it then asks for the strip index and the number of LEDs.
 
+**Configure** also has the update interval while printing (see
+[How often it polls](#how-often-it-polls)) and the webcam address (see [Webcam](#webcam)).
+
+If the board's password changes, Home Assistant asks for the new one (a repair/re-authentication
+prompt) instead of failing quietly. If the printer moves to another address, use the
+integration's **Reconfigure** menu entry; the printer keeps its device and entities.
+
 A poll that fails once (a Wi-Fi board drops the odd request) keeps the last values, so
 entities do not flip to unavailable and back. After 2 failed polls in a row they go
 unavailable.
@@ -89,6 +96,14 @@ filament monitor, an SD card).
 | `Extruder N filament present` | On when the monitor can see filament. Only created for monitors that can tell (simple switches; laser and pulsed monitors usually cannot) |
 | `<Board> MCU temperature`, `input voltage`, `12V rail`, `<Board> connected` | Main board and CAN expansion boards, as diagnostics. `connected` exists for expansion boards and is off when the board stops responding. `free RAM` exists but is disabled until you enable it |
 | `<Interface> IP address`, `Wi-Fi signal strength` | Signal only appears once Wi-Fi reports one |
+| `Online` | Connectivity diagnostic. Never unavailable: it is how you see that the printer stopped answering (after the same 2 missed polls that make the other entities unavailable) |
+| `Print ETA` | Timestamp the job should finish (last read + `timesLeft.file`), rounded to the minute so it does not change on every poll |
+| `Print start time`, `Print end time` | Timestamps taken from the job events. A job already running when Home Assistant starts gets a start time worked back from its duration. Unknown after a restart until the next job |
+| `Projected total duration` | Time elapsed plus time left, minutes. Only while a job runs |
+| `Print speed` | `move.currentMove.requestedSpeed`, mm/s |
+| `Slicer filament length` | Total filament the slicer estimated for the job file, mm. Attribute `extruders`: the same per extruder |
+| `Print objects` | Number of labelled objects (`M486`) in the job; attributes `objects` (index, name, cancelled), `cancelled`, `current`. Unknown when the file has no labelled objects |
+| `Firmware` (update, disabled by default) | Installed firmware against the newest *stable* RepRapFirmware release. **Enabling it makes Home Assistant ask `api.github.com` for the latest release, at most every 6 hours.** Informational: there is nothing to install |
 | `Storage N free space` | Mounted SD cards or USB drives, shown in GB with `capacity` as an attribute. Unavailable while unmounted |
 
 Filament monitor support follows the firmware's object model but has not been tried on
@@ -97,10 +112,47 @@ if yours does not behave.
 
 ### How often it polls
 
+There are two intervals, both in **Configure**. While the printer is idle it is polled every
+*update interval* (30 s by default). While a job is under way (`processing`, `pausing`,
+`resuming`, `cancelling`, `changingTool`) it is polled every *update interval while printing*
+(5 s by default, minimum 1 s, and never slower than the idle interval). That is when the
+extrusion counter and the job events matter. 5 s rather than 2 s because a Duet Wi-Fi module
+is far weaker than a Raspberry Pi; lower it if your board copes. A paused printer is polled at
+the idle rate, because nothing is being extruded.
+
 In standalone mode every poll is 7 small requests (job, heaters, tools, motion, fans and
 filament monitors). Boards, network and storage change rarely, so they are re-read once a
 minute instead. On a real board that is 10 requests and about 11 KB for a full read. In SBC
 mode everything comes from the single `/machine/status` request.
+
+## Controls
+
+Buttons, numbers and fans act on the printer. Pressing a button reads the printer's state
+first and raises an error instead of sending anything when it does not fit (the buttons stay
+available meanwhile, so they do not flap). After a change the result is read back on the next
+poll; nothing is shown optimistically.
+
+| Entity | Sends | Refused unless the printer is... |
+| --- | --- | --- |
+| `Pause`, `Resume`, `Cancel` buttons | `M25`, `M24`, `M0` | the same states as the actions below |
+| `Home all`, `Home X/Y/Z` buttons | `G28`, `G28 X`, ... (only for axes the printer has) | idle |
+| `Acknowledge message` button | `M292` | showing a message box |
+| `Emergency stop` button (**disabled by default**) | `M112` | never refused |
+| `Reset after emergency stop` button (**disabled by default**) | `M999` | halted |
+| `<Tool/Bed/Chamber> target` number | `M104 S.. T..`, `M140 P.. S..`, `M141 P.. S..` | any state, as in Duet Web Control. Maximum is the heater's limit less 15 °C (280 °C if the firmware reports none) |
+| `Speed factor` number | `M220 S..` (10-300 %) | any state |
+| `Extruder N flow` number | `M221 D.. S..` (10-300 %) | any state |
+| `<Fan name> control` fan | `M106 P.. S..` | any state. The percentage shown is what was asked for |
+| `Macro <name>` buttons (**disabled by default**) | `M98 P"0:/macros/<file>"` | idle |
+
+The speed, flow and target numbers sit alongside the read-only sensors of the same name
+(a different entity type), so no existing entity changed. A second heater of the same tool,
+bed or chamber has no target of its own, because `M104`/`M140`/`M141` set them together.
+
+**Macros:** the top level of `0:/macros` is listed at start-up and then once a minute, one
+button per file. They are disabled by default because there are usually many; enable the
+ones you want. Macros in sub-folders are not listed, and a file whose name contains a quote,
+semicolon or line break gets no button, because the name is pasted into G-code.
 
 ## Actions
 
@@ -114,9 +166,20 @@ with the action's target (if you have only one printer you can leave the target 
 | `duet3d.resume` | `M24` | paused |
 | `duet3d.cancel` | `M0` | running or paused. With no job, `M0` would still run `stop.g` |
 | `duet3d.acknowledge_message` (optional `cancel`) | `M292` / `M292 P1` | showing a message box |
+| `duet3d.emergency_stop` | `M112` | never refused |
+| `duet3d.reset_after_emergency_stop` | `M999` | halted |
+| `duet3d.load_filament` (`tool`, `filament`) | `M701 S"<filament>"` | idle, and `tool` already selected |
+| `duet3d.unload_filament` (`tool`) | `M702` | idle, and `tool` already selected |
+| `duet3d.cancel_object` (`object`) | `M486 P<object>` | running a job that has that object (see `Print objects`) |
 | `duet3d.send_code` (`gcode`) | whatever you give it | never refused |
 
-The first five read the printer's state when they are called, not from the last poll, and
+`M701` and `M702` act on the *selected* tool and take no tool parameter, so
+`load_filament`/`unload_filament` refuse unless `tool` is the selected one rather than
+select it for you (that would run the tool-change macros). Both move filament. There is no
+action that only sets the filament name: no G-code does that without loading. Filament names
+containing a quote, semicolon or line break are rejected.
+
+All except `send_code` and `emergency_stop` read the printer's state when they are called, not from the last poll, and
 raise an error instead of sending anything when it does not fit. `send_code` has no
 checks, so it can interrupt a job; use it for anything the others do not cover.
 
@@ -130,6 +193,54 @@ data:
 
 Replies to G-code are not returned (for example the output of `M122`).
 
+## Events and device triggers
+
+The integration works out from successive polls what the job did and fires a
+`duet3d_event` on the Home Assistant event bus. The same events are offered as **device
+triggers** ("Job finished" and so on) in the automation editor.
+
+| `type` | When |
+| --- | --- |
+| `job_started` | A job began |
+| `job_paused`, `job_resumed` | Paused / resumed (once each, even if the pause was shorter than a poll) |
+| `job_finished` | The job ended normally |
+| `job_cancelled` | The job ended after a `cancelling` state was seen, or the firmware says the file was cancelled (`job.lastFileCancelled`) |
+| `job_failed` | The firmware says the file was aborted (`job.lastFileAborted`), the printer halted mid-job, or it lost power mid-job |
+| `message_box_opened` | A new `M291` message box appeared (`message`, `title`, `mode`) |
+| `printer_halted` | The printer entered `halted` (emergency stop or a fatal error) |
+
+Event data: `device_id`, `name`, `type` and, for the job events, `file_name`, `duration`
+(seconds), `extruded_mm` (the job's total, last reading before the end), `tool`,
+`extruders` (of that tool), `slicer_filament_mm` (per extruder). The job details are kept
+from while the job was running because the firmware reports nothing once it ends.
+
+Things that are deliberately not events:
+- **Simulations** (`simulating`) never produce job events, so nothing downstream can bill a
+  simulated print.
+- **Nothing on the first poll.** Home Assistant starting in the middle of a job adopts it
+  silently and reports its end, with the job's whole extrusion.
+- A job that starts and ends between two polls cannot be seen.
+
+Events are fired just after the entities have been updated from the same poll, so an
+automation that reacts to one reads current states. `Filament Extruded` keeps its last value
+after a job ends (it only drops to 0 when the next job starts), so a `utility_meter` fed by
+it does not lose the last interval to a reset.
+
+## Webcam
+
+Set a webcam address in **Configure**. Left empty, the address in Duet Web Control's own
+settings (`0:/sys/dwc-settings.json`, `webcam.url` and `webcam.liveUrl`) is used when it is
+enabled there, read once when the integration loads. `{hostname}` in it is replaced by the
+printer's address. The `Webcam` camera is only created when an address is known. A snapshot
+address is read whole; an MJPEG stream address gives its first frame. The live stream
+address (`liveUrl` if there is one) is offered as the stream source.
+
+## Diagnostics
+
+**Download diagnostics** on the integration includes the firmware, mode, poll statistics,
+heater roles, hardware and the object model. The password, address, MAC, SSID, hostnames,
+board ID and file names are redacted.
+
 ## Filament / spool tracking
 
 Each extruder is exposed as a sensor so that other software (for example
@@ -140,7 +251,7 @@ standalone and SBC mode.
 | Entity | State | Notes |
 | --- | --- | --- |
 | `Extruder N` | Loaded filament name | One per extruder. Attributes: `name`, `type` (both the filament name), `extruder`, `tools`, `active` (this extruder belongs to the selected tool), `filament_diameter`, `position` |
-| `Filament Extruded` | mm | Filament extruded by the current job, before extrusion factors. Resets when a job starts |
+| `Filament Extruded` | mm | Filament extruded by the current job, before extrusion factors. Holds its last value after the job ends and resets when the next one starts |
 | `Current Tool` | tool number | `-1` when no tool is selected |
 
 The filament name is whatever `M701 S"PLA"` set. RepRapFirmware forgets it on

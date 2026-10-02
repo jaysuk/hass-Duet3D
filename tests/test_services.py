@@ -207,7 +207,11 @@ def test_services_yaml_passes_home_assistants_own_schema():
 
     path = Path(__file__).parent.parent / "custom_components" / "duet3d" / "services.yaml"
     services = _SERVICES_SCHEMA(load_yaml_dict(str(path)))
-    assert set(services) == {"send_code", "home", "pause", "resume", "cancel", "acknowledge_message"}
+    assert set(services) == {
+        "send_code", "home", "pause", "resume", "cancel", "acknowledge_message",
+        "emergency_stop", "reset_after_emergency_stop", "load_filament", "unload_filament",
+        "cancel_object",
+    }
     for name, description in services.items():
         assert description["target"]["device"][0]["integration"] == DOMAIN, name
     assert "axes" in services["home"]["fields"]

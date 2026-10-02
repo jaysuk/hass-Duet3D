@@ -70,7 +70,7 @@ async def test_options_form_is_served_over_http(hass, hass_client):
     fields = {field["name"] for field in result["data_schema"]}
     assert not {"number_of_tools", "bed", "standalone"} & fields
     # the LED strip is only asked about once there is one
-    assert fields == {"update_interval", "light"}
+    assert fields == {"update_interval", "printing_interval", "webcam_url", "light"}
 
 
 async def test_saving_options_keeps_working_for_an_entry_with_retired_keys(hass):
@@ -103,6 +103,57 @@ async def test_saving_options_keeps_working_for_an_entry_with_retired_keys(hass)
     assert entry.data["update_interval"] == 20
     # the detected mode is not an option and is left alone
     assert entry.data["standalone"] is True
+
+
+async def test_printing_interval_defaults_to_5_and_round_trips_through_the_options(hass):
+    from unittest.mock import patch
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={
+            "name": "duet", "host": "192.168.69.1", "port": 80, "password": "", "ssl": False,
+            "update_interval": 30, "light": False, "standalone": True,
+        },
+    )
+    entry.add_to_hass(hass)
+    with patch("custom_components.duet3d.async_setup_entry", return_value=True):
+        flow = await hass.config_entries.options.async_init(entry.entry_id)
+        defaults = {
+            str(key): key.default() for key in flow["data_schema"].schema if callable(key.default)
+        }
+        assert defaults["printing_interval"] == 5
+        # left alone, the default is saved
+        await hass.config_entries.options.async_configure(flow["flow_id"], {"update_interval": 30, "light": False})
+        assert entry.data["printing_interval"] == 5
+
+        flow = await hass.config_entries.options.async_init(entry.entry_id)
+        await hass.config_entries.options.async_configure(
+            flow["flow_id"], {"update_interval": 30, "printing_interval": 2, "light": False}
+        )
+        await hass.async_block_till_done()
+    assert entry.data["printing_interval"] == 2
+
+    # the form offers what was saved
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    defaults = {str(key): key.default() for key in flow["data_schema"].schema if callable(key.default)}
+    assert defaults["printing_interval"] == 2
+
+
+async def test_printing_interval_must_be_at_least_one_second(hass):
+    import pytest
+    from homeassistant.data_entry_flow import InvalidData
+
+    entry = MockConfigEntry(
+        domain=DOMAIN,
+        data={"name": "duet", "host": "h", "port": 80, "password": "", "ssl": False,
+              "update_interval": 30, "light": False, "standalone": True},
+    )
+    entry.add_to_hass(hass)
+    flow = await hass.config_entries.options.async_init(entry.entry_id)
+    with pytest.raises(InvalidData):
+        await hass.config_entries.options.async_configure(
+            flow["flow_id"], {"update_interval": 30, "printing_interval": 0, "light": False}
+        )
 
 
 async def test_ticking_leds_in_the_options_asks_which_strip(hass):

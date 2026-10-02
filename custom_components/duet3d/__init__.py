@@ -11,8 +11,10 @@ from homeassistant.helpers.update_coordinator import (
     DataUpdateCoordinator,
     UpdateFailed,
 )
+from homeassistant.core import callback
+from homeassistant.helpers import device_registry as dr
 from homeassistant.helpers.entity import DeviceInfo
-from homeassistant.exceptions import ConfigEntryNotReady
+from homeassistant.exceptions import ConfigEntryAuthFailed, ConfigEntryNotReady
 import homeassistant.util.dt as dt_util
 from typing import cast
 from yarl import URL
@@ -20,7 +22,9 @@ from yarl import URL
 from datetime import timedelta
 
 
+from .events import JobTracker
 from .hardware import build_hardware
+from .webcam import DWC_SETTINGS_PATH, parse_dwc_settings
 from .model import build_heater_roles, resolve, set_path
 from .services import async_register_services, async_unregister_services
 
@@ -41,17 +45,32 @@ from .const import (
     CONF_STANDALONE,
     DOMAIN,
     CONF_INTERVAL,
+    CONF_PRINTING_INTERVAL,
+    CONF_WEBCAM_URL,
+    DEFAULT_PRINTING_INTERVAL,
+    EVENT_NAME,
+    PRINTING_STATES,
     STANDALONE_POLL_FLAGS,
     STANDALONE_POLL_KEYS,
     STANDALONE_SLOW_POLL_KEYS,
     STANDALONE_SLOW_POLL_SECONDS,
+    MACRO_DIRECTORY,
     TOLERATED_FAILED_POLLS,
     CONF_JSON_HEADER,
     CONF_TEXT_PLAIN_HEADER,
 )
 
 _LOGGER = logging.getLogger(__name__)
-PLATFORMS = [Platform.BINARY_SENSOR, Platform.SENSOR, Platform.LIGHT, Platform.CAMERA]
+PLATFORMS = [
+    Platform.BINARY_SENSOR,
+    Platform.BUTTON,
+    Platform.CAMERA,
+    Platform.FAN,
+    Platform.LIGHT,
+    Platform.NUMBER,
+    Platform.SENSOR,
+    Platform.UPDATE,
+]
 
 
 def has_all_unique_names(value):
@@ -92,7 +111,7 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry):
 
     try:
         await coordinator.async_config_entry_first_refresh()
-    except ConfigEntryNotReady:
+    except (ConfigEntryNotReady, ConfigEntryAuthFailed):
         await coordinator.async_close_session()
         raise
 
@@ -116,6 +135,8 @@ async def async_setup_entry(hass: HomeAssistant, config_entry: ConfigEntry):
                 )
     except (KeyError, TypeError):
         _LOGGER.error("Failed to extract firmware/board data")
+
+    await coordinator.async_detect_webcam()
 
     hass.data[DOMAIN][config_entry.entry_id] = {"coordinator": coordinator}
 
@@ -156,7 +177,21 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
             update_interval=timedelta(seconds=interval),
         )
         self.data = {"status": None, "last_read_time": None}
+        # Seconds between polls when idle, and while a job runs. A job is polled at
+        # least as often as an idle printer, never less.
         self.interval = interval
+        self.printing_interval = min(
+            interval,
+            config_entry.data.get(CONF_PRINTING_INTERVAL, DEFAULT_PRINTING_INTERVAL),
+        )
+        self.tracker = JobTracker()
+        # When the current or last job started and ended, as seen by this integration
+        # (so unknown after a restart of Home Assistant until the next job).
+        self.job_started_at = None
+        self.job_ended_at = None
+        # Webcam addresses found in Duet Web Control's settings (see detect_webcam).
+        self.detected_webcam: dict[str, str | None] = {"url": None, "live_url": None}
+        self._pending_events: list[dict] = []
         self.config_entry = config_entry
         self.printer_online = False
         self.status_error_logged = False
@@ -166,6 +201,9 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         self.hardware: dict[str, dict[str, dict]] = build_hardware(None)
         self._slow_status: dict = {}
         self._slow_fetched_at: float | None = None
+        # File names of the macros in the top level of 0:/macros, refreshed with the slow poll.
+        self.macros: list[str] = []
+        self._macros_fetched_at: float | None = None
         self._failed_polls = 0
         self.base_url = "http{0}://{1}:{2}".format(
             "s" if self.config_entry.data[CONF_SSL] else "",
@@ -205,15 +243,23 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
             return
 
         session = await self._get_session()
-        connect_url = f"{self.base_url}/rr_connect?password={self._password}"
+        rejected = False
         try:
             async with asyncio.timeout(10):
-                async with session.get(connect_url, headers=CONF_JSON_HEADER) as resp:
+                async with session.get(
+                    f"{self.base_url}/rr_connect",
+                    params={"password": self._password},
+                    headers=CONF_JSON_HEADER,
+                ) as resp:
                     resp.raise_for_status()
                     data = await resp.json()
                     if data.get("err", 1) == 0:
                         self._authenticated = True
                         _LOGGER.debug("Authenticated with printer")
+                    elif data.get("err") == 1:
+                        # err 1 is "wrong password". (Other errors, such as err 2, no
+                        # free session, are the board's trouble and may pass.)
+                        rejected = True
                     else:
                         _LOGGER.error(
                             "Authentication failed (err=%s)", data.get("err")
@@ -221,6 +267,9 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         except Exception as exc:
             _LOGGER.error("Could not authenticate with printer: %s", exc)
             self._authenticated = False
+        if rejected:
+            self._authenticated = False
+            raise ConfigEntryAuthFailed("The board rejected the password")
 
     async def async_close_session(self):
         """Close the aiohttp session."""
@@ -329,7 +378,71 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
                 return self.data
             raise
         self._failed_polls = 0
+        if data is not None:
+            self._adapt_interval(data["status"])
+            try:
+                events = self.tracker.update(data["status"])
+                self._pending_events.extend(events)
+                self._track_job_times(events, data)
+            except Exception:  # pylint: disable=broad-except
+                # Events are a convenience: never let them cost the readings.
+                _LOGGER.exception("Could not work out job events from the last poll")
         return data
+
+    def _track_job_times(self, events: list[dict], data: dict) -> None:
+        now = data["last_read_time"]
+        for event in events:
+            if event["type"] == "job_started":
+                self.job_started_at, self.job_ended_at = now, None
+            elif event["type"] in ("job_finished", "job_cancelled", "job_failed"):
+                self.job_ended_at = now
+        if self.tracker.in_job and self.job_started_at is None:
+            # A job already running when we started watching: work back from its duration.
+            duration = resolve(data, "status.job.duration")
+            elapsed = duration if isinstance(duration, (int, float)) and not isinstance(duration, bool) else 0
+            self.job_started_at = now - timedelta(seconds=elapsed)
+
+    def _adapt_interval(self, status) -> None:
+        """Poll faster while a job runs: that is when the readings matter."""
+        state = resolve({"status": status}, "status.state.status")
+        seconds = self.printing_interval if state in PRINTING_STATES else self.interval
+        interval = timedelta(seconds=seconds)
+        if self.update_interval != interval:
+            _LOGGER.debug("Polling every %s s (printer is %s)", seconds, state)
+            self.update_interval = interval
+
+    @callback
+    def async_update_listeners(self) -> None:
+        """Tell the entities first, then announce the events.
+
+        An automation that reacts to ``job_finished`` reads entity states, so they
+        must already show the poll that produced the event.
+        """
+        super().async_update_listeners()
+        self._fire_events()
+
+    @callback
+    def _fire_events(self) -> None:
+        events, self._pending_events = self._pending_events, []
+        if not events:
+            return
+        registry = dr.async_get(self.hass)
+        identifier = (DOMAIN, cast(str, self.config_entry.unique_id))
+        if hasattr(registry, "async_get_device_by_identifier"):
+            device = registry.async_get_device_by_identifier(
+                identifier, self.config_entry.entry_id
+            )
+        else:  # Home Assistant before the lookup was scoped to a config entry
+            device = registry.async_get_device(identifiers={identifier})
+        for event in events:
+            self.hass.bus.async_fire(
+                EVENT_NAME,
+                {
+                    "device_id": device.id if device else None,
+                    "name": self.config_entry.data[CONF_NAME],
+                    **event,
+                },
+            )
 
     async def _poll(self):
         """Read the object model once."""
@@ -350,11 +463,104 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
             status = await self.get_status()
         if status is None:
             return None
+        await self._refresh_macros()
         self.heater_roles = build_heater_roles(
             resolve(status, "heat"), resolve(status, "tools")
         )
         self.hardware = build_hardware(status)
         return {"status": status, "last_read_time": dt_util.utcnow()}
+
+    async def fetch_json(self, url: str, params: dict | None = None):
+        """GET ``url`` and decode the JSON, logging in again once if the session expired."""
+        await self._ensure_authenticated()
+        session = await self._get_session()
+        async with asyncio.timeout(10):
+            async with session.get(url, params=params, headers=CONF_JSON_HEADER) as response:
+                if response.status == 401:
+                    self._authenticated = False
+                    await self._ensure_authenticated()
+                    async with session.get(
+                        url, params=params, headers=CONF_JSON_HEADER
+                    ) as retry:
+                        retry.raise_for_status()
+                        return await retry.json(content_type=None)
+                response.raise_for_status()
+                return await response.json(content_type=None)
+
+    @property
+    def webcam_url(self) -> str | None:
+        """The webcam to show: the one set in the options, else the one DWC has."""
+        return self.config_entry.data.get(CONF_WEBCAM_URL) or self.detected_webcam["url"]
+
+    @property
+    def webcam_live_url(self) -> str | None:
+        """The address to stream from: DWC's live address if it has one."""
+        if self.config_entry.data.get(CONF_WEBCAM_URL):
+            return self.config_entry.data[CONF_WEBCAM_URL]
+        return self.detected_webcam["live_url"] or self.detected_webcam["url"]
+
+    async def async_detect_webcam(self) -> None:
+        """Read the webcam address from DWC's settings file on the board, if there is one."""
+        try:
+            if self.config_entry.data[CONF_STANDALONE]:
+                settings = await self.fetch_json(
+                    f"{self.base_url}/rr_download", {"name": DWC_SETTINGS_PATH}
+                )
+            else:
+                settings = await self.fetch_json(
+                    f"{self.base_url}{CONF_SBC_API}/file/{DWC_SETTINGS_PATH}"
+                )
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.debug("No webcam settings read from the board: %s", exc)
+            return
+        self.detected_webcam = parse_dwc_settings(
+            settings, self.config_entry.data[CONF_HOST], self.base_url
+        )
+
+    async def _refresh_macros(self) -> None:
+        """Re-read the macro directory, at most as often as the slow poll.
+
+        Macros are a convenience: a missing directory or a failed request keeps the
+        last list and never fails the poll.
+        """
+        now = self.hass.loop.time()
+        if (
+            self._macros_fetched_at is not None
+            and now - self._macros_fetched_at < STANDALONE_SLOW_POLL_SECONDS
+        ):
+            return
+        self._macros_fetched_at = now
+        try:
+            self.macros = await self._list_macros()
+        except Exception as exc:  # pylint: disable=broad-except
+            _LOGGER.debug("Could not list %s: %s", MACRO_DIRECTORY, exc)
+
+    async def _list_macros(self) -> list[str]:
+        if not self.config_entry.data[CONF_STANDALONE]:
+            listing = await self.fetch_json(
+                f"{self.base_url}{CONF_SBC_API}/directory/{MACRO_DIRECTORY}"
+            )
+            entries = listing if isinstance(listing, list) else []
+            return sorted(
+                e["name"] for e in entries
+                if isinstance(e, dict) and e.get("type") == "f" and isinstance(e.get("name"), str)
+            )
+        names: list[str] = []
+        first = 0
+        for _ in range(100):  # a page holds a few dozen entries; never loop forever
+            page = await self.fetch_json(
+                f"{self.base_url}/rr_filelist", {"dir": MACRO_DIRECTORY, "first": first}
+            )
+            if not isinstance(page, dict) or page.get("err"):
+                break
+            names.extend(
+                e["name"] for e in page.get("files") or []
+                if isinstance(e, dict) and e.get("type") == "f" and isinstance(e.get("name"), str)
+            )
+            first = page.get("next") or 0
+            if not first:
+                break
+        return sorted(names)
 
     async def _fetch_keys(self, keys, status: dict) -> None:
         """Fetch each rr_model key into ``status`` at the same place DSF would have it."""

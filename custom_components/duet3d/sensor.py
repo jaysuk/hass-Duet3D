@@ -23,8 +23,9 @@ from homeassistant.const import (
 )
 from . import DuetDataUpdateCoordinator
 from .entity import add_dynamic
-from .extruders import build_extruders
+from .extruders import build_extruders, slicer_filament
 from .hardware import message_box
+from .jobinfo import build_objects, eta, projected_total_minutes, slicer_total
 from .model import as_number, heater_power, heater_state, heater_value
 
 _LOGGER = logging.getLogger(__name__)
@@ -136,6 +137,7 @@ async def async_setup_entry(
         DuetFilamentExtrudedSensor(coordinator, "Filament Extruded", device_id),
         DuetCurrentToolSensor(coordinator, "Current Tool", device_id),
         *_static_sensors(coordinator, device_id),
+        *_job_sensors(coordinator, device_id),
     ]
     async_add_entities(entities)
 
@@ -626,7 +628,11 @@ class DuetExtruderSensor(DuetPrintSensorBase):
 class DuetFilamentExtrudedSensor(DuetPrintSensorBase):
     """Filament extruded by the current job, before extrusion factors, in mm.
 
-    Resets when a new job starts, so it is a ``total_increasing`` sensor.
+    The firmware reports nothing once the job ends, so this keeps the last reading
+    until the next job starts. If it fell to 0 in the same poll that says ``idle``,
+    a ``utility_meter`` fed by it would see a reset and lose everything extruded
+    since the previous poll. It is a ``total_increasing`` sensor: the drop when the
+    next job starts is the reset.
     """
 
     _attr_native_unit_of_measurement = "mm"
@@ -642,6 +648,7 @@ class DuetFilamentExtrudedSensor(DuetPrintSensorBase):
             sensor_name,
             f"{sensor_name}-{device_id}",
         )
+        self._latched: float | None = None
 
     @property
     def native_value(self):
@@ -650,8 +657,8 @@ class DuetFilamentExtrudedSensor(DuetPrintSensorBase):
             SENSOR_TYPES["Filament Extrusion"]["json_path"], "Filament Extrusion"
         )
         if isinstance(extruded, (int, float)) and not isinstance(extruded, bool):
-            return round(extruded, 2)
-        return 0
+            self._latched = round(extruded, 2)
+        return 0 if self._latched is None else self._latched
 
     @property
     def available(self) -> bool:
@@ -936,4 +943,59 @@ def _static_sensors(coordinator, device_id) -> list[DuetValueSensor]:
                unit=PERCENTAGE, state_class=measurement, icon="mdi:speedometer"),
         sensor("Display Message", at("Display Message", _text_or_none), icon="mdi:message-text"),
         sensor("Message Box", box, attrs_fn=box_attributes, icon="mdi:message-alert"),
+    ]
+
+
+def _job_sensors(coordinator, device_id) -> list[DuetValueSensor]:
+    """When the job will end, how long it will take, and what the slicer expected."""
+
+    def at(sensor_type):
+        path = SENSOR_TYPES[sensor_type]["json_path"]
+        return lambda c: c.get_sensor_state(path)
+
+    def sensor(name, value_fn, **options):
+        return DuetValueSensor(coordinator, name, f"{name}-{device_id}", value_fn, **options)
+
+    timestamp = SensorDeviceClass.TIMESTAMP
+    left = SENSOR_TYPES["Time Remaining"]["json_path"]
+    duration = SENSOR_TYPES["Time Elapsed"]["json_path"]
+    filament = SENSOR_TYPES["Progress"]["json_path"]
+
+    def read_at(c):
+        return (c.data or {}).get("last_read_time")
+
+    def slicer_attrs(c):
+        lengths = slicer_filament(c.get_sensor_state(filament))
+        return {"extruders": lengths} if lengths else None
+
+    def objects(c):
+        return build_objects(c.get_sensor_state(SENSOR_TYPES["Build"]["json_path"]))
+
+    def objects_attrs(c):
+        found = objects(c)
+        if not found:
+            return None
+        current = as_number(c.get_sensor_state(SENSOR_TYPES["Build"]["json_path"] + ".currentObject"))
+        return {
+            "objects": found,
+            "cancelled": sum(1 for o in found if o["cancelled"]),
+            "current": current if current is not None and current >= 0 else None,
+        }
+
+    return [
+        sensor("Print ETA", lambda c: eta(read_at(c), c.get_sensor_state(left)),
+               device_class=timestamp, icon="mdi:clock-check"),
+        sensor("Print start time", lambda c: c.job_started_at,
+               device_class=timestamp, icon="mdi:clock-start"),
+        sensor("Print end time", lambda c: c.job_ended_at,
+               device_class=timestamp, icon="mdi:clock-end"),
+        sensor("Projected total duration",
+               lambda c: projected_total_minutes(c.get_sensor_state(duration), c.get_sensor_state(left)),
+               unit="min", state_class=SensorStateClass.MEASUREMENT, icon="mdi:timer-sand"),
+        sensor("Print speed", lambda c: as_number(at("Print Speed")(c)),
+               unit="mm/s", state_class=SensorStateClass.MEASUREMENT, icon="mdi:speedometer"),
+        sensor("Slicer filament length", lambda c: slicer_total(c.get_sensor_state(filament)),
+               attrs_fn=slicer_attrs, unit="mm", icon="mdi:ruler"),
+        sensor("Print objects", lambda c: len(objects(c)) or None,
+               attrs_fn=objects_attrs, icon="mdi:cube-outline"),
     ]

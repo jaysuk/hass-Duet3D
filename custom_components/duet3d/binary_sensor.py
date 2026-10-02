@@ -54,6 +54,14 @@ async def async_setup_entry(
             category=EntityCategory.DIAGNOSTIC,
         ),
     ]
+    entities.append(
+        DuetOnlineSensor(
+            coordinator, "Online", f"Online-{device_id}",
+            lambda c: c.last_update_success,
+            device_class=BinarySensorDeviceClass.CONNECTIVITY,
+            category=EntityCategory.DIAGNOSTIC,
+        )
+    )
     async_add_entities(entities)
 
     def monitors():
@@ -167,6 +175,19 @@ class DuetValueBinarySensor(DuetPrintSensorBase):
         if not self.coordinator.last_update_success:
             return False
         return self._exists_fn is None or self._exists_fn(self.coordinator)
+
+
+class DuetOnlineSensor(DuetValueBinarySensor):
+    """Whether the printer is answering.
+
+    Unavailable would hide exactly what this reports, so it never is. It follows the
+    coordinator's own verdict rather than the last request: a board that misses one
+    poll is tolerated (the entities keep their data) and is not shown as offline.
+    """
+
+    @property
+    def available(self) -> bool:
+        return True
 
 
 def _filament_present(coordinator, device_id, key, extruder) -> DuetValueBinarySensor:

@@ -24,9 +24,24 @@ SERVICE_PAUSE = "pause"
 SERVICE_RESUME = "resume"
 SERVICE_CANCEL = "cancel"
 SERVICE_ACKNOWLEDGE_MESSAGE = "acknowledge_message"
+SERVICE_EMERGENCY_STOP = "emergency_stop"
+SERVICE_RESET_AFTER_EMERGENCY_STOP = "reset_after_emergency_stop"
+SERVICE_LOAD_FILAMENT = "load_filament"
+SERVICE_UNLOAD_FILAMENT = "unload_filament"
+SERVICE_CANCEL_OBJECT = "cancel_object"
+ATTR_OBJECT = "object"
 ATTR_AXES = "axes"
+ATTR_TOOL = "tool"
+ATTR_FILAMENT = "filament"
 ATTR_CANCEL = "cancel"
 CONF_INTERVAL = "update_interval"
+CONF_PRINTING_INTERVAL = "printing_interval"
+CONF_WEBCAM_URL = "webcam_url"
+# Seconds between polls while a job is running. A Duet Wi-Fi module is far weaker than
+# a Raspberry Pi, and a whole standalone poll is 7 requests, so this is not lower.
+DEFAULT_PRINTING_INTERVAL = 5
+# Event fired on the Home Assistant bus for job lifecycle changes (see events.py).
+EVENT_NAME = "duet3d_event"
 CONF_LED_STRIP_INDEX = "led_strip_index"
 CONF_LED_COUNT = "led_count"
 
@@ -49,6 +64,8 @@ STANDALONE_POLL_KEYS = (
 STANDALONE_SLOW_POLL_KEYS = ("boards", "network", "volumes")
 STANDALONE_SLOW_POLL_SECONDS = 60
 STANDALONE_POLL_FLAGS = "d99vn"
+MACRO_DIRECTORY = "0:/macros"
+FIRMWARE_RELEASES_URL = "https://api.github.com/repos/Duet3D/RepRapFirmware/releases/latest"
 # Polls that may fail in a row before entities go unavailable (the last data is kept).
 TOLERATED_FAILED_POLLS = 2
 
@@ -108,10 +125,15 @@ SENSOR_TYPES = {
         "icon": "mdi:axis-x-arrow",
     },
     "Thumbnail": {"json_path": "status.job.file.thumbnails", "icon": "mdi:picture"},
+    "Print Speed": {"json_path": "status.move.currentMove.requestedSpeed"},
+    "Build": {"json_path": "status.job.build"},
     "Current Layer": {"json_path": "status.job.layer"},
     "Total Layers": {"json_path": "status.job.file.numLayers"},
     "File Name": {"json_path": "status.job.file.fileName"},
 }
+
+# ``state.status`` values in which a job is under way, so the printer is polled faster.
+PRINTING_STATES = {"processing", "pausing", "resuming", "cancelling", "changingTool"}
 
 PRINTER_STATUS = {
     "starting",

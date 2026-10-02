@@ -146,6 +146,44 @@ async def start_server(model=None):
             return web.json_response({"err": 1})
         return web.json_response({"err": 0, "sessionTimeout": 8000, "apiLevel": 2})
 
+    async def rr_filelist(request):
+        directory = request.query.get("dir", "0:/")
+        first = int(request.query.get("first", 0))
+        everything = server.files.get(directory)
+        if everything is None:
+            return web.json_response({"err": 1, "dir": directory, "first": first, "files": []})
+        page = everything[first : first + server.page_size]
+        more = first + server.page_size
+        return web.json_response(
+            {
+                "dir": directory,
+                "first": first,
+                "files": page,
+                "next": more if more < len(everything) else 0,
+            }
+        )
+
+    async def rr_download(request):
+        name = request.query.get("name", "")
+        if name not in server.downloads:
+            return web.Response(status=404)
+        return web.json_response(server.downloads[name])
+
+    async def webcam_snapshot(request):
+        return web.Response(body=server.webcam_frame, content_type="image/jpeg")
+
+    async def webcam_stream(request):
+        # An MJPEG stream: parts forever; the test closes the connection after a frame.
+        response = web.StreamResponse(
+            headers={"Content-Type": "multipart/x-mixed-replace; boundary=frame"}
+        )
+        await response.prepare(request)
+        for _ in range(3):
+            await response.write(
+                b"--frame\r\nContent-Type: image/jpeg\r\n\r\n" + server.webcam_frame + b"\r\n"
+            )
+        return response
+
     async def web_page(request):
         # A real board answers any unknown URL with its web UI and status 200.
         return web.Response(text="<html>Duet Web Control</html>", content_type="text/html")
@@ -154,6 +192,10 @@ async def start_server(model=None):
     app.router.add_get("/rr_model", rr_model)
     app.router.add_get("/rr_gcode", rr_gcode)
     app.router.add_get("/rr_connect", rr_connect)
+    app.router.add_get("/rr_filelist", rr_filelist)
+    app.router.add_get("/rr_download", rr_download)
+    app.router.add_get("/webcam/snapshot", webcam_snapshot)
+    app.router.add_get("/webcam/stream", webcam_stream)
     app.router.add_get("/{tail:.*}", web_page)
     server = TestServer(app)
     await server.start_server()
@@ -162,7 +204,17 @@ async def start_server(model=None):
     server.gcodes = gcodes
     server.fail = False  # True: rr_model answers 503, as a busy board does
     server.password = ""
+    # rr_filelist: directory -> entries, paged ``page_size`` at a time with ``next``
+    server.files = {"0:/macros": [], "0:/macros/": []}
+    server.page_size = 2**31
+    # rr_download: file name -> JSON document
+    server.downloads = {}
+    server.webcam_frame = b"\xff\xd8\xff\xe0JFIF-fake-image\xff\xd9"
     return server
+
+
+def macro_file(name, kind="f"):
+    return {"type": kind, "name": name, "size": 100, "date": "2026-01-01T00:00:00"}
 
 
 def entry_for(server, **extra):
@@ -212,3 +264,32 @@ async def refresh(hass, entry):
 def by_unique_id_prefix(hass, prefix):
     registry = er.async_get(hass)
     return [e for e in registry.entities.values() if e.platform == DOMAIN and e.unique_id.startswith(prefix)]
+
+
+def job_poll(server, status, *, extruded=None, tool=0, **job):
+    """Put the fake printer in ``status`` as it would look during a job.
+
+    Outside a job (``idle``/``off``/``halted``) the firmware reports no file, no
+    duration and a null ``rawExtrusion``, which is what the consumers must cope with.
+    """
+    in_job = status not in ("idle", "off", "halted")
+    model = server.model
+    model["state"]["status"] = status
+    model["state"]["currentTool"] = tool
+    model["job"]["rawExtrusion"] = extruded
+    model["job"]["duration"] = 60 if in_job else None
+    model["job"]["file"]["fileName"] = "0:/gcodes/benchy.gcode" if in_job else None
+    model["job"].update(job)
+
+
+async def step(hass, entry, server, status, **kwargs):
+    """``job_poll`` then one coordinator poll."""
+    job_poll(server, status, **kwargs)
+    await refresh(hass, entry)
+
+
+def collect_events(hass):
+    """Every ``duet3d_event`` fired from now on, in order."""
+    events = []
+    hass.bus.async_listen("duet3d_event", lambda event: events.append(dict(event.data)))
+    return events

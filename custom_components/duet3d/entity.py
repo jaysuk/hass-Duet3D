@@ -7,6 +7,7 @@ from typing import Any
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import callback
 from homeassistant.helpers.entity_platform import AddEntitiesCallback
+from homeassistant.helpers.update_coordinator import CoordinatorEntity
 
 
 def add_dynamic(
@@ -39,3 +40,24 @@ def add_dynamic(
 
     config_entry.async_on_unload(coordinator.async_add_listener(_add))
     _add()
+
+
+class DuetEntity(CoordinatorEntity):
+    """Base of the entities that are not sensors: named like the sensors, on the printer's device.
+
+    ``name`` is appended to the printer's name (as the sensors do, so entity ids
+    read ``<platform>.<printer>_<name>``) and ``unique_id`` must stay stable.
+    """
+
+    def __init__(self, coordinator, name: str, unique_id: str) -> None:
+        super().__init__(coordinator)
+        self._attr_name = f"{coordinator.device_info['name']} {name}"
+        self._attr_unique_id = unique_id
+
+    @property
+    def device_info(self):
+        return self.coordinator.device_info
+
+    @property
+    def available(self) -> bool:
+        return self.coordinator.last_update_success

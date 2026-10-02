@@ -73,3 +73,16 @@ def build_extruders(extruders: Any, tools: Any, current_tool: Any) -> list[dict[
             }
         )
     return result
+
+
+def slicer_filament(filament: Any) -> list[float]:
+    """Filament length in mm the slicer estimated for each extruder of the job file.
+
+    ``job.file.filament`` is a list indexed by extruder; anything else (the value is
+    ``null`` with no job, or an empty string over ``rr_model``) gives an empty list.
+    """
+    return [
+        float(length)
+        for length in _as_list(filament)
+        if isinstance(length, (int, float)) and not isinstance(length, bool)
+    ]

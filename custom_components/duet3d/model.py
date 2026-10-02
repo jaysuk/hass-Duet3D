@@ -147,6 +147,7 @@ def build_heater_roles(heat: Any, tools: Any) -> dict[str, dict[str, Any]]:
                     "kind": kind,
                     "label": name if slot == 0 else f"{name} heater {slot}",
                     "heater": heater,
+                    "index": index,
                     "slot": slot,
                     "types": BED_TEMPERATURE_TYPES,
                 }
@@ -197,3 +198,10 @@ def heater_value(heat: Any, tools: Any, role: dict[str, Any], sensor_type: str) 
             if role["slot"] < len(targets) and as_number(targets[role["slot"]]) is not None:
                 return targets[role["slot"]]
     return as_number(heater.get(sensor_type))
+
+
+def heater_limit(heat: Any, role: dict[str, Any]) -> float | None:
+    """The heater's maximum temperature (``heaters[n].max``), if the firmware reports it."""
+    heater = _heater(heat, role)
+    limit = as_number(heater.get("max")) if heater else None
+    return limit if limit is not None and limit > 0 else None

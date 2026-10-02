@@ -3,6 +3,8 @@
 This is a work in progress. Entities are created properly and values can be read from the `rr_model` (standalone) or `/machine/status` (SBC) endpoint of your Duet board. Tools, bed and chamber are discovered from the object model. Tested against RRF 3.7.0-rc.2; see the README for details.
 Standalone and SBC mode are detected automatically.
 
+Besides readings it offers controls (pause/resume/cancel/home buttons, temperature, speed, flow and fan controls, macro buttons), job events with device triggers, a webcam, filament actions for spool tracking, diagnostics and re-authentication. See the README for what each does and when it refuses.
+
 ## Installation
 
 ### From HACS
