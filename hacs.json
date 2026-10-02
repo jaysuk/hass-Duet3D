@@ -1,6 +1,5 @@
 {
     "name": "Duet3D",
     "render_readme": true,
-    "country": "DE",
     "homeassistant": "2024.11.0"
 }
