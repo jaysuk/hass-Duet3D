@@ -1,22 +1,18 @@
 """Config flow for Duet3D Printer integration."""
 from homeassistant import config_entries
 import logging
-from homeassistant.core import callback, HomeAssistant
+from homeassistant.core import callback
 import voluptuous as vol
 import homeassistant.helpers.config_validation as cv
 from homeassistant.const import CONF_HOST, CONF_PORT, CONF_SSL, CONF_PASSWORD
 from homeassistant.data_entry_flow import FlowResult
 from typing import Any
 from homeassistant.helpers.typing import UNDEFINED
-import aiohttp
-import asyncio
-from aiohttp.client_exceptions import ClientError
 
 from .const import (
     DOMAIN,
     CONF_NAME,
     DEFAULT_NAME,
-    CONF_SBC_API,
     CONF_SBC_GCODE_PATH,
     CONF_SBC_STATUS_PATH,
     CONF_BASE_URL,
@@ -25,9 +21,8 @@ from .const import (
     CONF_LED_COUNT,
     CONF_INTERVAL,
     CONF_STANDALONE,
-    CONF_JSON_HEADER,
-    CONF_TEXT_PLAIN_HEADER,
 )
+from .detect import CannotConnect, InvalidAuth, NotADuet, detect_standalone
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -39,11 +34,10 @@ def _schema_with_defaults(
     port=80,
     password="",
     update_interval=30,
-    has_light=False,
-    led_strip_index=0,
-    led_count=1,
-    use_standalone=True,
 ):
+    # Standalone or SBC mode is detected from the board, and the LED strip is set up in
+    # the options once there is one. Do not wrap fields in a nested vol.Schema: HA
+    # cannot serialise it and the form then fails to load with a 500.
     return vol.Schema(
         {
             vol.Required(CONF_NAME, default=name): str,
@@ -52,38 +46,8 @@ def _schema_with_defaults(
             vol.Optional(CONF_PASSWORD, default=password): str,
             vol.Required(CONF_PORT, default=port): cv.port,
             vol.Required(CONF_INTERVAL, default=update_interval): int,
-            # Tools, bed and chamber are read from the object model, not configured.
-            # Do not wrap fields in a nested vol.Schema: HA cannot serialise it and the
-            # form then fails to load with a 500.
-            vol.Optional(CONF_LIGHT, default=has_light): bool,
-            vol.Optional(CONF_LED_STRIP_INDEX, default=led_strip_index): int,
-            vol.Optional(CONF_LED_COUNT, default=led_count): int,
-            vol.Optional(CONF_STANDALONE, default=use_standalone): bool,
         },
-        extra=vol.ALLOW_EXTRA,
     )
-
-
-async def test_sbc_connection(base_url) -> str:
-    connection_url = f"{base_url}/connect"
-    async with asyncio.timeout(10):
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                connection_url, headers=CONF_JSON_HEADER
-            ) as response:
-                response.raise_for_status()
-                return response.status
-
-
-async def test_standalone_connection(base_url, password) -> str:
-    connection_url = f"{base_url}/rr_connect?password={password}"
-    async with asyncio.timeout(10):
-        async with aiohttp.ClientSession() as session:
-            async with session.get(
-                connection_url, headers=CONF_JSON_HEADER
-            ) as response:
-                response.raise_for_status()
-                return response.status
 
 
 class Duet3dConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
@@ -105,31 +69,38 @@ class Duet3dConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
                 user_input[CONF_PORT],
             )
 
+            standalone = None
             try:
-                if user_input[CONF_STANDALONE]:
-                    await test_standalone_connection(connection_url, user_input[CONF_PASSWORD])
-                else:
-                    await test_sbc_connection(connection_url)
-            except (ClientError, asyncio.TimeoutError):
+                standalone = await detect_standalone(
+                    connection_url, user_input.get(CONF_PASSWORD, "")
+                )
+            except InvalidAuth:
+                errors[CONF_PASSWORD] = "invalid_auth"
+            except NotADuet:
+                errors[CONF_HOST] = "not_a_duet"
+            except CannotConnect:
                 errors[CONF_HOST] = "cannot_connect"
             except Exception:  # pylint: disable=broad-except
                 _LOGGER.exception("Unexpected exception")
                 errors[CONF_HOST] = "unknown"
 
             if not errors:
+                _LOGGER.info(
+                    "%s is a %s Duet", user_input[CONF_HOST], "standalone" if standalone else "SBC"
+                )
                 return self.async_create_entry(
                     title=f"{user_input[CONF_NAME]} ({user_input[CONF_HOST]})",
                     data={
                         CONF_NAME: user_input[CONF_NAME],
                         CONF_HOST: user_input[CONF_HOST],
                         CONF_PORT: user_input[CONF_PORT],
-                        CONF_PASSWORD: user_input[CONF_PASSWORD],
+                        CONF_PASSWORD: user_input.get(CONF_PASSWORD, ""),
                         CONF_SSL: user_input[CONF_SSL],
                         CONF_INTERVAL: user_input[CONF_INTERVAL],
-                        CONF_LIGHT: user_input[CONF_LIGHT],
+                        CONF_LIGHT: user_input.get(CONF_LIGHT, False),
                         CONF_LED_STRIP_INDEX: user_input.get(CONF_LED_STRIP_INDEX, 0),
                         CONF_LED_COUNT: user_input.get(CONF_LED_COUNT, 1),
-                        CONF_STANDALONE: user_input[CONF_STANDALONE],
+                        CONF_STANDALONE: standalone,
                         CONF_BASE_URL: connection_url,
                         CONF_SBC_STATUS_PATH: CONF_SBC_STATUS_PATH,
                         CONF_SBC_GCODE_PATH: CONF_SBC_GCODE_PATH,
@@ -159,9 +130,13 @@ class Duet3dOptionsFlow(config_entries.OptionsFlow):
     """Options flow for Duet3D Printer integration.
 
     ``self.config_entry`` is provided by Home Assistant; assigning it is an error.
+    The LED strip questions are only asked when the printer has an LED strip.
     """
 
     title: str | None = None
+
+    def __init__(self) -> None:
+        self.new_entry_data: dict[str, Any] = {}
 
     @callback
     def finish_flow(self) -> FlowResult:
@@ -178,17 +153,15 @@ class Duet3dOptionsFlow(config_entries.OptionsFlow):
         self, user_input: dict[str, Any] | None = None
     ) -> FlowResult:
         """Manage the options."""
-        errors: dict[str, str] = {}
         config_data = self.config_entry.data
         config_options = self.config_entry.options
         if user_input is not None:
             self.new_entry_data = {
                 CONF_INTERVAL: user_input[CONF_INTERVAL],
                 CONF_LIGHT: user_input[CONF_LIGHT],
-                CONF_LED_STRIP_INDEX: user_input.get(CONF_LED_STRIP_INDEX, 0),
-                CONF_LED_COUNT: user_input.get(CONF_LED_COUNT, 1),
-                CONF_STANDALONE: user_input[CONF_STANDALONE],
             }
+            if user_input[CONF_LIGHT]:
+                return await self.async_step_led()
             return self.finish_flow()
         options_schema = vol.Schema(
             {
@@ -200,22 +173,33 @@ class Duet3dOptionsFlow(config_entries.OptionsFlow):
                 ): cv.positive_int,
                 vol.Optional(
                     CONF_LIGHT,
-                    default=config_data.get(CONF_LIGHT),
-                ): bool,
-                vol.Optional(
-                    CONF_LED_STRIP_INDEX,
-                    default=config_data.get(CONF_LED_STRIP_INDEX, 0),
-                ): int,
-                vol.Optional(
-                    CONF_LED_COUNT,
-                    default=config_data.get(CONF_LED_COUNT, 1),
-                ): int,
-                vol.Optional(
-                    CONF_STANDALONE,
-                    default=config_data.get(CONF_STANDALONE),
+                    default=config_data.get(CONF_LIGHT, False),
                 ): bool,
             }
         )
+        return self.async_show_form(step_id="init", data_schema=options_schema)
+
+    async def async_step_led(
+        self, user_input: dict[str, Any] | None = None
+    ) -> FlowResult:
+        """Which LED strip, asked only after "LED's installed" is ticked."""
+        if user_input is not None:
+            self.new_entry_data[CONF_LED_STRIP_INDEX] = user_input[CONF_LED_STRIP_INDEX]
+            self.new_entry_data[CONF_LED_COUNT] = user_input[CONF_LED_COUNT]
+            return self.finish_flow()
+        config_data = self.config_entry.data
         return self.async_show_form(
-            step_id="init", data_schema=options_schema, errors=errors
+            step_id="led",
+            data_schema=vol.Schema(
+                {
+                    vol.Optional(
+                        CONF_LED_STRIP_INDEX,
+                        default=config_data.get(CONF_LED_STRIP_INDEX, 0),
+                    ): int,
+                    vol.Optional(
+                        CONF_LED_COUNT,
+                        default=config_data.get(CONF_LED_COUNT, 1),
+                    ): int,
+                }
+            ),
         )

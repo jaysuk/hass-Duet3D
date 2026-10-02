@@ -1,6 +1,6 @@
 # Duet3D integration for Home Assistant
 
-This is a work in progress. Entities are created properly and values can be read from the `rr_model` (standalone) or `/machine/status` (SBC) endpoint of your Duet board. Ensure to select the correct mode (Standalone vs SBC)
+This is a work in progress. Entities are created properly and values can be read from the `rr_model` (standalone) or `/machine/status` (SBC) endpoint of your Duet board. Standalone and SBC mode are detected automatically when you add the printer.
 
 Tested against RRF 3.7.0-rc.2 on a real standalone board. The RRF 3.6 object model
 layout (`heat.bedHeaters` instead of `heat.bedHeaterMapping`) is handled and covered by
@@ -34,8 +34,17 @@ Add the Duet3D Printer integration via the UI.
     - Port => Printer port => Usually 80
     - Password => password, or empty if you don't have one , or if you are using SBC
     - Update frequency
-    - LEDd's installed => check if your printer has LED
-    - Use standalone => check if your board is directly connected to your network. Uncheck if you are in SBC (duet board conencted to a rpi for example) see : [User manuel Duet](https://docs.duet3d.com/en/User_manual/Overview/Getting_started_Duet_3_MB6HC#:~:text=Standalone%20mode%20vs%20SBC%20mode%20The%20Duet%203,%28Duet%20Web%20Control%29%20etc%20work%20in%20both%20modes)
+
+Whether the board is [standalone or in SBC mode](https://docs.duet3d.com/en/User_manual/Overview/Getting_started_Duet_3_MB6HC#:~:text=Standalone%20mode%20vs%20SBC%20mode%20The%20Duet%203,%28Duet%20Web%20Control%29%20etc%20work%20in%20both%20modes)
+is detected from what it answers, and a wrong password is reported. If you change a board
+between the two modes, remove the integration and add it again.
+
+If your printer has an LED strip, open the integration's **Configure** and tick
+"LED's installed"; it then asks for the strip index and the number of LEDs.
+
+A poll that fails once (a Wi-Fi board drops the odd request) keeps the last values, so
+entities do not flip to unavailable and back. After 2 failed polls in a row they go
+unavailable.
 
 ## Temperatures
 

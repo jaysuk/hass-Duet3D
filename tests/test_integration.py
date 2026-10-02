@@ -250,6 +250,75 @@ async def test_state_follows_the_printer_on_the_next_poll(hass, fake_duet):
     assert hass.states.get(entity_id).state == "PLA"
 
 
+def _watch_state_changes(hass):
+    from homeassistant.const import EVENT_STATE_CHANGED
+
+    changes = []
+    hass.bus.async_listen(
+        EVENT_STATE_CHANGED,
+        lambda event: changes.append((event.data["entity_id"], event.data["new_state"].state)),
+    )
+    return changes
+
+
+async def test_a_missed_poll_changes_no_entity(hass, fake_duet):
+    """A Wi-Fi board drops the odd request. Every entity going unavailable and coming
+    back is one Activity entry per entity, so a single failed poll must be invisible."""
+    entry = await _setup(hass, fake_duet)
+    changes = _watch_state_changes(hass)
+
+    fake_duet.model["move"]["extruders"][0]["filament"] = "PLA"
+    fake_duet.fail = True
+    await _refresh(hass, entry)  # one failed poll: nothing changes yet...
+    assert changes == []
+    assert _state(hass, entry, "extruder-0").state == "unknown"
+
+    fake_duet.fail = False
+    await _refresh(hass, entry)  # ...and the next good poll is just an ordinary update
+    assert changes == [("sensor.voron_extruder_0", "PLA")]
+
+
+async def test_a_printer_that_stays_unreachable_goes_unavailable_and_recovers(hass, fake_duet):
+    from custom_components.duet3d.const import TOLERATED_FAILED_POLLS
+
+    entry = await _setup(hass, fake_duet)
+    fake_duet.fail = True
+    for _ in range(TOLERATED_FAILED_POLLS):
+        await _refresh(hass, entry)
+        assert _state(hass, entry, "Current Tool").state == "-1"
+
+    await _refresh(hass, entry)
+    assert _state(hass, entry, "Current Tool").state == "unavailable"
+
+    fake_duet.fail = False
+    await _refresh(hass, entry)
+    assert _state(hass, entry, "Current Tool").state == "-1"
+
+
+async def test_failures_do_not_accumulate_across_good_polls(hass, fake_duet):
+    from custom_components.duet3d.const import TOLERATED_FAILED_POLLS
+
+    entry = await _setup(hass, fake_duet)
+    for _ in range(3):  # more failures in total than tolerated, but never in a row
+        fake_duet.fail = True
+        for _ in range(TOLERATED_FAILED_POLLS):
+            await _refresh(hass, entry)
+        fake_duet.fail = False
+        await _refresh(hass, entry)
+        assert _state(hass, entry, "Current Tool").state == "-1"
+
+
+async def test_setup_retries_later_when_the_printer_is_down(hass, fake_duet):
+    from homeassistant.config_entries import ConfigEntryState
+
+    fake_duet.fail = True
+    entry = _entry(fake_duet)
+    entry.add_to_hass(hass)
+    await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    assert entry.state is ConfigEntryState.SETUP_RETRY
+
+
 async def test_extruder_appearing_later_gets_a_sensor(hass, fake_duet):
     """The firmware can gain an extruder (M584 in config-override, hot-plugged expansion)."""
     entry = await _setup(hass, fake_duet)

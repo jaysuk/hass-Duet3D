@@ -49,6 +49,8 @@ STANDALONE_POLL_KEYS = (
 STANDALONE_SLOW_POLL_KEYS = ("boards", "network", "volumes")
 STANDALONE_SLOW_POLL_SECONDS = 60
 STANDALONE_POLL_FLAGS = "d99vn"
+# Polls that may fail in a row before entities go unavailable (the last data is kept).
+TOLERATED_FAILED_POLLS = 2
 
 # Matches legacy temperature sensors, whose unique_id was "<tool number>-<type>-<entry id>"
 # and which read heaters[<tool number>] regardless of which heater the tool uses.

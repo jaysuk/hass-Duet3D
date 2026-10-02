@@ -129,6 +129,8 @@ async def start_server(model=None):
 
     async def rr_model(request):
         requests.append((request.query.get("key"), request.query.get("flags")))
+        if server.fail:
+            return web.Response(status=503)
         try:
             result = resolve_key(model, request.query["key"])
         except (KeyError, TypeError):
@@ -139,14 +141,27 @@ async def start_server(model=None):
         gcodes.append(request.query["gcode"])
         return web.json_response({"buff": 100})
 
+    async def rr_connect(request):
+        if server.password and request.query.get("password") != server.password:
+            return web.json_response({"err": 1})
+        return web.json_response({"err": 0, "sessionTimeout": 8000, "apiLevel": 2})
+
+    async def web_page(request):
+        # A real board answers any unknown URL with its web UI and status 200.
+        return web.Response(text="<html>Duet Web Control</html>", content_type="text/html")
+
     app = web.Application()
     app.router.add_get("/rr_model", rr_model)
     app.router.add_get("/rr_gcode", rr_gcode)
+    app.router.add_get("/rr_connect", rr_connect)
+    app.router.add_get("/{tail:.*}", web_page)
     server = TestServer(app)
     await server.start_server()
     server.model = model
     server.requests = requests
     server.gcodes = gcodes
+    server.fail = False  # True: rr_model answers 503, as a busy board does
+    server.password = ""
     return server
 
 

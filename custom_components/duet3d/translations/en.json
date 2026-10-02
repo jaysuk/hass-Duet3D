@@ -3,21 +3,21 @@
     "flow_title": "Duet3D Printer: {host}",
     "step": {
       "user": {
+        "description": "Standalone or SBC mode is detected automatically. An LED strip can be added afterwards in the options.",
         "data": {
           "host": "Host",
           "port": "Port",
           "name": "Name",
+          "password": "Password (leave empty if none)",
           "update_interval": "Update interval (seconds)",
-          "light": "LED's installed",
-          "led_strip_index": "LED strip index (default 0)",
-          "led_count": "Number of LEDs",
-          "standalone": "Use standalone mode",
           "ssl": "Use SSL?"
         }
       }
     },
     "error": {
       "cannot_connect": "Could not connect to host",
+      "invalid_auth": "The board rejected the password",
+      "not_a_duet": "That address did not answer like a Duet board",
       "unknown": "Unknown error occurred"
     },
     "abort": {
@@ -33,10 +33,14 @@
         "title": "Duet3D Options",
         "data": {
           "update_interval": "Update interval (seconds)",
-          "light": "LED's installed",
+          "light": "LED's installed"
+        }
+      },
+      "led": {
+        "title": "LED strip",
+        "data": {
           "led_strip_index": "LED strip index (default 0)",
-          "led_count": "Number of LEDs",
-          "standalone": "Use standalone mode"
+          "led_count": "Number of LEDs"
         }
       }
     }

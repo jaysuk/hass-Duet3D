@@ -45,6 +45,7 @@ from .const import (
     STANDALONE_POLL_KEYS,
     STANDALONE_SLOW_POLL_KEYS,
     STANDALONE_SLOW_POLL_SECONDS,
+    TOLERATED_FAILED_POLLS,
     CONF_JSON_HEADER,
     CONF_TEXT_PLAIN_HEADER,
 )
@@ -165,6 +166,7 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
         self.hardware: dict[str, dict[str, dict]] = build_hardware(None)
         self._slow_status: dict = {}
         self._slow_fetched_at: float | None = None
+        self._failed_polls = 0
         self.base_url = "http{0}://{1}:{2}".format(
             "s" if self.config_entry.data[CONF_SSL] else "",
             config_entry.data[CONF_HOST],
@@ -265,10 +267,12 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
                 _LOGGER.error("Failed to connect to Duet3D board: %s", conn_exc)
                 self.status_error_logged = True
             self.printer_online = False
-            raise ConfigEntryNotReady(conn_exc) from conn_exc
-        except asyncio.TimeoutError as timeout_exc:
+            raise UpdateFailed(conn_exc) from conn_exc
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError) as exc:
+            # A busy or briefly unreachable board: HTTP errors, dropped connections,
+            # timeouts, a body that is not JSON.
             self.printer_online = False
-            raise UpdateFailed(timeout_exc) from timeout_exc
+            raise UpdateFailed(exc) from exc
 
     async def send_gcode(self, gcode: str) -> str | None:
         """Send G-code to the printer (used by service handler)."""
@@ -302,7 +306,33 @@ class DuetDataUpdateCoordinator(DataUpdateCoordinator):
                     return await response.text()
 
     async def _async_update_data(self):
-        """Update printer data via API."""
+        """Update printer data via API.
+
+        A board on Wi-Fi regularly misses a request. One failed poll must not make
+        every entity unavailable and then available again, because each of those
+        recoveries is a state change for every entity (a wall of Activity entries).
+        So the last good data is kept for ``TOLERATED_FAILED_POLLS`` failures in a
+        row, and only a printer that stays unreachable is reported as such.
+        """
+        try:
+            data = await self._poll()
+        except UpdateFailed:
+            self._failed_polls += 1
+            if (
+                self.data
+                and self.data.get("status") is not None
+                and self._failed_polls <= TOLERATED_FAILED_POLLS
+            ):
+                _LOGGER.debug(
+                    "Poll failed (%s in a row), keeping the last data", self._failed_polls
+                )
+                return self.data
+            raise
+        self._failed_polls = 0
+        return data
+
+    async def _poll(self):
+        """Read the object model once."""
         if self.config_entry.data[CONF_STANDALONE]:
             # One request per object model key rather than one per sensor.
             status = {}

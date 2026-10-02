@@ -1,7 +1,7 @@
 # Duet3D integration for Home Assistant
 
 This is a work in progress. Entities are created properly and values can be read from the `rr_model` (standalone) or `/machine/status` (SBC) endpoint of your Duet board. Tools, bed and chamber are discovered from the object model. Tested against RRF 3.7.0-rc.2; see the README for details.
-Ensure to select the correct mode (Standalone vs SBC)
+Standalone and SBC mode are detected automatically.
 
 ## Installation
 
