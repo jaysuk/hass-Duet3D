@@ -131,6 +131,10 @@ async def start_server(model=None):
         requests.append((request.query.get("key"), request.query.get("flags")))
         if server.fail:
             return web.Response(status=503)
+        if server.emulate_job_control and request.query.get("key") == "state":
+            # A pause takes one poll to finish, as a real one does.
+            if model["state"]["status"] == "pausing":
+                model["state"]["status"] = "paused"
         try:
             result = resolve_key(model, request.query["key"])
         except (KeyError, TypeError):
@@ -138,8 +142,35 @@ async def start_server(model=None):
         return web.json_response({"key": request.query["key"], "flags": "", "result": result})
 
     async def rr_gcode(request):
-        gcodes.append(request.query["gcode"])
+        apply_gcode(request.query["gcode"])
         return web.json_response({"buff": 100})
+
+    def apply_gcode(code):
+        """Record ``code``, and refuse or emulate what the firmware would (see GCodes2.cpp)."""
+        gcodes.append(code)
+        state = model["state"]
+        if code == "M0" and state["status"] != "paused":
+            # RRF replies with this text and does nothing; over HTTP there is no error.
+            server.refused.append(("M0", "Pause the print before attempting to cancel it"))
+        if not server.emulate_job_control:
+            return
+        if code == "M25" and state["status"] in ("processing", "simulating"):
+            state["status"] = "pausing"
+        elif code == "M0" and state["status"] == "paused":
+            state["status"] = "idle"
+            model["job"]["lastFileCancelled"] = True
+        elif code == "M24" and state["status"] == "paused":
+            state["status"] = "processing"
+
+    async def rr_thumbnail(request):
+        key = (request.query.get("name", ""), int(request.query.get("offset", 0)))
+        server.thumbnail_requests.append(key)
+        if key not in server.thumbnails:
+            return web.json_response({"err": 1})
+        data, more = server.thumbnails[key]
+        return web.json_response(
+            {"fileName": key[0], "offset": key[1], "data": data, "next": more, "err": 0}
+        )
 
     async def rr_connect(request):
         if server.password and request.query.get("password") != server.password:
@@ -194,6 +225,7 @@ async def start_server(model=None):
     app.router.add_get("/rr_connect", rr_connect)
     app.router.add_get("/rr_filelist", rr_filelist)
     app.router.add_get("/rr_download", rr_download)
+    app.router.add_get("/rr_thumbnail", rr_thumbnail)
     app.router.add_get("/webcam/snapshot", webcam_snapshot)
     app.router.add_get("/webcam/stream", webcam_stream)
     app.router.add_get("/{tail:.*}", web_page)
@@ -204,12 +236,89 @@ async def start_server(model=None):
     server.gcodes = gcodes
     server.fail = False  # True: rr_model answers 503, as a busy board does
     server.password = ""
+    # Every (code, reply) the firmware would have refused or ignored.
+    server.refused = []
+    # True: M25/M0/M24 move ``state.status`` as the firmware does. Off, tests set it by hand.
+    server.emulate_job_control = False
+    # rr_thumbnail: (file name, offset) -> (base64 text, next offset or 0)
+    server.thumbnails = {}
+    server.thumbnail_requests = []
     # rr_filelist: directory -> entries, paged ``page_size`` at a time with ``next``
     server.files = {"0:/macros": [], "0:/macros/": []}
     server.page_size = 2**31
     # rr_download: file name -> JSON document
     server.downloads = {}
     server.webcam_frame = b"\xff\xd8\xff\xe0JFIF-fake-image\xff\xd9"
+    return server
+
+
+async def start_sbc_server(model=None):
+    """A fake DSF: ``/machine/status``, ``/machine/code``, ``/machine/directory``, ``/machine/file``.
+
+    ``server.codes`` records ``(code, async query value)``; ``server.code_replies`` maps a
+    code to its reply text. With ``server.password`` set, every request needs the
+    ``X-Session-Key`` that ``/machine/connect`` hands out for the right password.
+    """
+    model = copy.deepcopy(MODEL) if model is None else model
+    codes = []
+
+    def authorised(request):
+        return not server.password or request.headers.get("X-Session-Key") == server.session_key
+
+    async def connect(request):
+        server.connects += 1
+        if server.password and request.query.get("password", "") != server.password:
+            return web.Response(status=403)
+        return web.json_response({"sessionKey": server.session_key})
+
+    async def status(request):
+        if server.fail:
+            return web.Response(status=503)
+        if not authorised(request):
+            return web.Response(status=401)
+        return web.json_response(model)
+
+    async def code(request):
+        if not authorised(request):
+            return web.Response(status=401)
+        body = (await request.read()).decode()
+        codes.append((body, request.query.get("async")))
+        return web.Response(text=server.code_replies.get(body, ""), content_type="text/plain")
+
+    async def directory(request):
+        if not authorised(request):
+            return web.Response(status=401)
+        path = request.match_info["path"]
+        entries = server.files.get(path)
+        if entries is None:
+            return web.Response(status=404)
+        return web.json_response(entries)
+
+    async def file(request):
+        if not authorised(request):
+            return web.Response(status=401)
+        path = request.match_info["path"]
+        if path not in server.downloads:
+            return web.Response(status=404)
+        return web.json_response(server.downloads[path])
+
+    app = web.Application()
+    app.router.add_get("/machine/connect", connect)
+    app.router.add_get("/machine/status", status)
+    app.router.add_post("/machine/code", code)
+    app.router.add_get("/machine/directory/{path:.*}", directory)
+    app.router.add_get("/machine/file/{path:.*}", file)
+    server = TestServer(app)
+    await server.start_server()
+    server.model = model
+    server.codes = codes
+    server.code_replies = {}
+    server.fail = False
+    server.password = ""
+    server.session_key = "fake-session-key"
+    server.connects = 0
+    server.files = {"0:/macros": []}
+    server.downloads = {}
     return server
 
 
@@ -234,6 +343,15 @@ def entry_for(server, **extra):
             **extra,
         },
     )
+
+
+async def setup_sbc_entry(hass, server, entry=None, **extra):
+    """Set up the integration against a fake DSF (``standalone: False``)."""
+    entry = entry or entry_for(server, standalone=False, **extra)
+    entry.add_to_hass(hass)
+    assert await hass.config_entries.async_setup(entry.entry_id)
+    await hass.async_block_till_done()
+    return entry
 
 
 async def setup_entry(hass, server, entry=None):
