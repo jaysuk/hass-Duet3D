@@ -4,7 +4,7 @@ send_code:
     Send any G-code to the printer. Nothing is checked first, so this can interrupt
     a running job; prefer the other services where one fits.
   target:
-    device:
+    entity:
       integration: duet3d
   fields:
     gcode:
@@ -20,7 +20,7 @@ home:
   description: >-
     Home all axes, or only the ones given. Refused unless the printer is idle.
   target:
-    device:
+    entity:
       integration: duet3d
   fields:
     axes:
@@ -38,14 +38,14 @@ pause:
   name: Pause print
   description: Pause the running job (M25). Refused unless a job is running.
   target:
-    device:
+    entity:
       integration: duet3d
 
 resume:
   name: Resume print
   description: Resume a paused job (M24). Refused unless the job is paused.
   target:
-    device:
+    entity:
       integration: duet3d
 
 cancel:
@@ -56,7 +56,7 @@ cancel:
     Duet Web Control does, and cancelled once the pause has finished (up to 60 s).
     Refused if no job is active.
   target:
-    device:
+    entity:
       integration: duet3d
 
 acknowledge_message:
@@ -65,7 +65,7 @@ acknowledge_message:
     Dismiss the message box the printer is showing (M291 prompts, such as
     "change filament"). Refused if there is no message.
   target:
-    device:
+    entity:
       integration: duet3d
   fields:
     cancel:
@@ -82,7 +82,7 @@ emergency_stop:
     Send M112, which halts the printer at once, heaters off, in any state. The
     board then has to be reset with "Reset after emergency stop".
   target:
-    device:
+    entity:
       integration: duet3d
 
 reset_after_emergency_stop:
@@ -91,7 +91,7 @@ reset_after_emergency_stop:
     Send M999 to restart the board after an emergency stop. Refused unless the
     printer is halted.
   target:
-    device:
+    entity:
       integration: duet3d
 
 load_filament:
@@ -103,7 +103,7 @@ load_filament:
     unless the printer is idle, the tool has an extruder with no filament loaded, and
     the filament exists in 0:/filaments.
   target:
-    device:
+    entity:
       integration: duet3d
   fields:
     tool:
@@ -133,7 +133,7 @@ unload_filament:
     and clears the filament name. The tool must already be selected. Refused unless
     the printer is idle and a filament is loaded.
   target:
-    device:
+    entity:
       integration: duet3d
   fields:
     tool:
@@ -154,7 +154,7 @@ cancel_object:
     printing. The job file must label its objects; see the "Print objects" sensor
     for their numbers. Refused unless a job is running.
   target:
-    device:
+    entity:
       integration: duet3d
   fields:
     object:

@@ -94,8 +94,11 @@ def ensure_valid_path(value):
     return value
 
 
+CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
 async def async_setup(hass, config):
-    """Legacy way to set up Duet3D component from YAML."""
+    """Nothing to set up from YAML; printers are added through config entries."""
     return True
 
 

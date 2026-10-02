@@ -5,6 +5,12 @@ Each `## <version>` heading below becomes the GitHub release notes for the tag `
 To release: add the section, set `version` in `custom_components/duet3d/manifest.json` to
 match, commit, then push a `v<version>` tag.
 
+## 0.4.2 - 2026-10-02
+
+- The actions' target picker now filters by entity instead of device, as Home Assistant's
+  validation (hassfest) requires. A target that is not a Duet printer is still refused.
+- Declared that the integration is set up from the UI only (`CONFIG_SCHEMA`).
+
 ## 0.4.1 - 2026-10-02
 
 Fixes from an audit of 0.4.0.

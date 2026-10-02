@@ -6,6 +6,7 @@ import voluptuous as vol
 
 from homeassistant.exceptions import HomeAssistantError, ServiceValidationError
 from homeassistant.helpers import device_registry as dr
+from homeassistant.helpers import entity_registry as er
 
 from fake_duet import DOMAIN, entry_for, setup_entry, start_server
 
@@ -179,6 +180,21 @@ async def test_with_several_printers_the_caller_must_choose(hass, fake_duet):
         await second.close()
 
 
+async def test_an_entity_target_picks_that_printer(hass, fake_duet):
+    """services.yaml offers entities (hassfest bans a device filter), so the UI sends entity_id."""
+    second = await start_server()
+    try:
+        first_entry = await setup_entry(hass, fake_duet)
+        await setup_entry(hass, second, entry_for(second))
+
+        entity = next(iter(er.async_entries_for_config_entry(er.async_get(hass), first_entry.entry_id)))
+        await call(hass, "send_code", {"gcode": "M115", "entity_id": [entity.entity_id]})
+        assert fake_duet.gcodes == ["M115"]
+        assert second.gcodes == []
+    finally:
+        await second.close()
+
+
 async def test_a_target_that_is_not_a_duet_is_refused(hass, fake_duet):
     await setup_entry(hass, fake_duet)
     with pytest.raises(ServiceValidationError, match="not a Duet3D printer"):
@@ -213,6 +229,8 @@ def test_services_yaml_passes_home_assistants_own_schema():
         "cancel_object",
     }
     for name, description in services.items():
-        assert description["target"]["device"][0]["integration"] == DOMAIN, name
+        assert description["target"]["entity"][0]["integration"] == DOMAIN, name
+        # hassfest rejects a device filter on a service target
+        assert "device" not in description["target"], name
     assert "axes" in services["home"]["fields"]
     assert services["send_code"]["fields"]["gcode"]["required"] is True
